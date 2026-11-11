@@ -57,6 +57,21 @@ EURORACK_COMMIT = "08460a69a7e1f7a81c5a2abcc7189c9a6b7208d4"     # 16/08/2023
 STMLIB_COMMIT = "e3bd7c9cc00e4364166f9905c0509b6ffd0535ec"       # 30/05/2023, son sous-module stmlib à ce commit
 SOURCES = ("braids/macro_oscillator.cc", "braids/analog_oscillator.cc", "braids/digital_oscillator.cc",
            "braids/resources.cc", "stmlib/utils/random.cc")
+# notes/75 : Peaks (4 batteries) et Sheep (3 banques) après les 47 modèles de Braids. Hors de portée des tweaks
+# existants : EXT reste False (leurs octets ne bougent pas) ; gen_macro_ext.py le met à True pour son tweak.
+EXT = False
+EXT_SOURCES = ("peaks/drums/bass_drum.cc", "peaks/drums/snare_drum.cc", "peaks/drums/high_hat.cc",
+               "peaks/drums/fm_drum.cc", "peaks/resources.cc", "tides/resources.cc")
+EXT_LOCAL = ("peaks_glue.cc", "sheep_glue.cc")
+EXT_DEFS = ("-DMC_EXT", "-DMC_SHEEP")
+# Sheep's wavetable (tides::wt_waves, 91 KB) does not fit in the window the code of MACRO has (pay .. pay + STUBS, 99 KB
+# of it used by Braids): it is linked on its own at pay + SHEEP_OFF, above ACID's variables (the payload's runtime
+# room is 1 MB with Model-TG, gen_macro_syntakt.TG_ROOM), and packed as one more part. compile_machine leaves it in
+# EXT_BLOB = (address, bytes) for the generator (gen_macro_ext.py).
+SHEEP_OFF = 0x7a000
+SHEEP_SECTION = ".rodata._ZN5tides8wt_wavesE"
+EXT_BLOB = None
+EXT_NAMES = ("PEAKS_BASS_DRUM", "PEAKS_SNARE_DRUM", "PEAKS_HI_HAT", "PEAKS_FM_DRUM", "SHEEP_A", "SHEEP_B", "SHEEP_C")
 # -O2 : le coût mesuré d'une voix (notes/43 §8) ; pas d'exceptions ni de constructeurs globaux (rien ne les appelle)
 CXXFLAGS = ["-mcpu=54418", "-O2", "-U_FORTIFY_SOURCE", "-fno-exceptions", "-fno-rtti", "-fno-threadsafe-statics",
             "-fno-use-cxa-atexit", "-fno-pic", "-fno-common", "-ffunction-sections", "-fdata-sections",
@@ -95,6 +110,10 @@ LINK = """SECTIONS
   /DISCARD/ : {{ *(.comment) *(.note*) *(.eh_frame*) }}
 }}
 """
+# .sheep comes first: the linker gives an input section to the first rule that matches it, and .rodata then follows .text
+# stmlib tags some functions IN_RAM (section .ramtext, "run from RAM" on the STM32): here all runs from RAM, they go in .text
+LINK_EXT = LINK.replace("  .text {code:#x}", "  .sheep {sheep:#x} : {{ *(" + SHEEP_SECTION + ") }}\n  .text {code:#x}").replace(
+    "*(.text*) }}", "*(.text*) *(.ramtext*) }}")
 TG_FIRST = gs.TG_FIRST
 BRAIDS_RENDER = "_ZN6braids15MacroOscillator6RenderEPKhPsj"      # MacroOscillator::Render(sync, buffer, size)
 
@@ -125,22 +144,25 @@ def license_text(repo):
 
 
 def compile_machine(tmp, repo, pay, bss_at=None, code_end=None):
-    """Braids + la passerelle, liés à pay (code, tables, données) et bss_at (variables ; pay + BSS_OFF par défaut).
+    """Braids (et, si EXT, Peaks et Sheep) + la passerelle, liés à pay (code, tables, données) et bss_at (variables ;
+    pay + BSS_OFF par défaut).
     Le code et les données doivent finir avant code_end (gs.STUBS par défaut). Renvoie (octets de pay à la fin des
     données, symboles, fin du BSS)."""
     bss_at = pay + BSS_OFF if bss_at is None else bss_at
     code_end = gs.STUBS if code_end is None else code_end
     objs = []
-    for s in SOURCES + (SRC / "macro.cc",):
+    extra = (*(repo / e for e in EXT_SOURCES), *(SRC / e for e in EXT_LOCAL)) if EXT else ()
+    for s in SOURCES + (SRC / "macro.cc",) + extra:
         src = s if isinstance(s, pathlib.Path) else repo / s
-        o = tmp / (src.stem + ".o")
-        gx.run([gx.CROSS + "g++", *CXXFLAGS, f"-I{repo}", "-c", str(src), "-o", str(o)])
+        o = tmp / (src.parent.name + "_" + src.stem + ".o")        # braids/, peaks/ et tides/ ont chacun un resources.cc
+        gx.run([gx.CROSS + "g++", *CXXFLAGS, *(EXT_DEFS if EXT else ()), f"-I{repo}", *((f"-I{SRC}",) if EXT else ()),
+                "-c", str(src), "-o", str(o)])
         objs.append(o)
     o = tmp / "rt.o"
     gx.run([gx.CROSS + "gcc", *CFLAGS_RT, "-c", str(SRC / "rt.c"), "-o", str(o)])
     objs.append(o)
     ld, elf, out = tmp / "link.ld", tmp / "macro.elf", tmp / "macro.bin"
-    ld.write_text(LINK.format(code=pay, bss=bss_at))
+    ld.write_text(LINK_EXT.format(code=pay, bss=bss_at, sheep=pay + SHEEP_OFF) if EXT else LINK.format(code=pay, bss=bss_at))
     gx.run([gx.CROSS + "ld", "-T", str(ld), "--gc-sections", "--no-warn-rwx-segments", "-e", "macro_update",
             "-u", "macro_render", "-o", str(elf), *map(str, objs)])
     secs = {}
@@ -148,11 +170,18 @@ def compile_machine(tmp, repo, pay, bss_at=None, code_end=None):
         f = line.split()
         if len(f) > 4 and f[0].isdigit():
             secs[f[1]] = (int(f[3], 16), int(f[2], 16))      # adresse, taille
-    extra = set(secs) - {".text", ".rodata", ".data", ".bss"}
+    extra = set(secs) - {".text", ".rodata", ".data", ".bss"} - ({".sheep"} if EXT else set())
     if extra:
         raise SystemExit(f"!! sections inattendues (constructeurs globaux ?) : {sorted(extra)}")
-    gx.run([gx.CROSS + "objcopy", "-O", "binary", "-R", ".bss", str(elf), str(out)])
+    global EXT_BLOB
+    gx.run([gx.CROSS + "objcopy", "-O", "binary", "-R", ".bss", *(("-R", ".sheep") if EXT else ()), str(elf), str(out)])
     blob = out.read_bytes()
+    if EXT:
+        if ".sheep" not in secs or secs[".sheep"][1] < 90000:
+            raise SystemExit("!! Sheep's wavetable (tides::wt_waves) not found in the link: " + str(secs.get(".sheep")))
+        sheep = tmp / "sheep.bin"
+        gx.run([gx.CROSS + "objcopy", "-O", "binary", "-j", ".sheep", str(elf), str(sheep)])
+        EXT_BLOB = (pay + SHEEP_OFF, sheep.read_bytes())
     syms = {}
     for line in gx.run([gx.CROSS + "nm", str(elf)]).splitlines():
         p_ = line.split()

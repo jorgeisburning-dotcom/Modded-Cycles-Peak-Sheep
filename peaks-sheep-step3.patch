@@ -1,0 +1,132 @@
+diff --git a/tools/machines/macro/peaks_glue.cc b/tools/machines/macro/peaks_glue.cc
+index c8ddaed..8bad5f5 100644
+--- a/tools/machines/macro/peaks_glue.cc
++++ b/tools/machines/macro/peaks_glue.cc
+@@ -53,6 +53,9 @@ extern "C" void ext_init(void *st, int kind)
+ 	case 1: new (&V(st)->snare) SnareDrum; V(st)->snare.Init(); break;
+ 	case 2: new (&V(st)->hat) HighHat; V(st)->hat.Init(); break;
+ 	case 3: new (&V(st)->fm) FmDrum; V(st)->fm.Init(); V(st)->fm.set_sd_range(false); break;
++#ifdef MC_SHEEP
++	default: sheep_init(st, kind); break;
++#endif
+ 	}
+ }
+ 
+@@ -80,11 +83,22 @@ extern "C" void ext_set(void *st, int kind, int note, int a, int b, int c, int d
+ 		V(st)->fm.set_noise(ub);
+ 		V(st)->fm.set_decay(dec);
+ 		break;
++#ifdef MC_SHEEP
++	default:
++		sheep_set(st, kind, note, a, b, c, decay);
++		break;
++#endif
+ 	}
+ }
+ 
+ extern "C" void ext_render(void *st, int kind, int strike, short *out, int n)
+ {
++#ifdef MC_SHEEP
++	if (kind >= EXT_PEAKS) {
++		sheep_render(st, kind, strike, out, n);
++		return;
++	}
++#endif
+ 	GateFlags gate[64];
+ 	if (n > 64)
+ 		n = 64;
+@@ -97,5 +111,7 @@ extern "C" void ext_render(void *st, int kind, int strike, short *out, int n)
+ 	case 1: V(st)->snare.Process(gate, out, n); break;
+ 	case 2: V(st)->hat.Process(gate, out, n); break;
+ 	case 3: V(st)->fm.Process(gate, out, n); break;
++#ifdef MC_SHEEP
++#endif
+ 	}
+ }
+diff --git a/tools/machines/macro/sheep_glue.cc b/tools/machines/macro/sheep_glue.cc
+index d2ee909..85adcad 100644
+--- a/tools/machines/macro/sheep_glue.cc
++++ b/tools/machines/macro/sheep_glue.cc
+@@ -18,9 +18,11 @@ struct SheepState {
+ 	int note, x, y, fold;
+ };
+ 
++static_assert(sizeof(SheepState) <= EXT_BYTES, "EXT_BYTES too small for the Sheep state");
++
+ static inline SheepState *S(void *st) { return reinterpret_cast<SheepState *>(st); }
+ 
+-extern "C" void ext_init(void *st, int kind)
++extern "C" void sheep_init(void *st, int kind)
+ {
+ 	if (kind < 4)
+ 		return;
+@@ -30,7 +32,7 @@ extern "C" void ext_init(void *st, int kind)
+ 	S(st)->x = S(st)->y = S(st)->fold = 0;
+ }
+ 
+-extern "C" void ext_set(void *st, int kind, int note, int a, int b, int c, int decay)
++extern "C" void sheep_set(void *st, int kind, int note, int a, int b, int c, int decay)
+ {
+ 	(void)decay;
+ 	if (kind < 4)
+@@ -41,7 +43,7 @@ extern "C" void ext_set(void *st, int kind, int note, int a, int b, int c, int d
+ 	S(st)->fold = c * 32767 / 32766;                 /* 0 .. 32767: fold, no filtering */
+ }
+ 
+-extern "C" void ext_render(void *st, int kind, int strike, short *out, int n)
++extern "C" void sheep_render(void *st, int kind, int strike, short *out, int n)
+ {
+ 	if (kind < 4)
+ 		return;
+diff --git a/tools/machines/macro/voices.h b/tools/machines/macro/voices.h
+index 15cc3ea..eda1542 100644
+--- a/tools/machines/macro/voices.h
++++ b/tools/machines/macro/voices.h
+@@ -25,6 +25,12 @@ void ext_init(void *st, int kind);
+ void ext_set(void *st, int kind, int note, int a, int b, int c, int decay);
+ /* n samples (16 bit, full scale) ; strike: a trig happens at the first sample */
+ void ext_render(void *st, int kind, int strike, short *out, int n);
++#ifdef MC_SHEEP
++/* kinds 4..6, defined in sheep_glue.cc ; peaks_glue.cc owns ext_* and hands the Sheep kinds over to these */
++void sheep_init(void *st, int kind);
++void sheep_set(void *st, int kind, int note, int a, int b, int c, int decay);
++void sheep_render(void *st, int kind, int strike, short *out, int n);
++#endif
+ }
+ 
+ #endif
+diff --git a/tools/setup_ext_build.sh b/tools/setup_ext_build.sh
+index 3d81307..3918a92 100755
+--- a/tools/setup_ext_build.sh
++++ b/tools/setup_ext_build.sh
+@@ -24,12 +24,16 @@ fi
+ git -C vendor/eurorack checkout -q 08460a69a7e1f7a81c5a2abcc7189c9a6b7208d4
+ git -C vendor/eurorack submodule update --init stmlib
+ echo "== 3/6 host proofs against the original Peaks and Tides code"
+-tools/check_peaks_host.sh vendor/eurorack 2>&1 | tail -1 | tee "$LOG/peaks_host.log"
+-tools/check_sheep_host.sh vendor/eurorack 2>&1 | tail -1 | tee "$LOG/sheep_host.log"
++tools/check_peaks_host.sh vendor/eurorack > "$LOG/peaks_host.log" 2>&1 || { tail -20 "$LOG/peaks_host.log"; echo "!! Peaks host proof failed"; exit 1; }
++tail -1 "$LOG/peaks_host.log"
++tools/check_sheep_host.sh vendor/eurorack > "$LOG/sheep_host.log" 2>&1 || { tail -20 "$LOG/sheep_host.log"; echo "!! Sheep host proof failed"; exit 1; }
++tail -1 "$LOG/sheep_host.log"
+ echo "== 4/6 baseline: the stock OS still builds with the same MAIN OS hash"
+-python3 tools/build.py -i "$CY" --syntakt "$ST" --os -o build/baseline.syx 2>&1 | tee "$LOG/baseline.log" | grep "MAIN OS"
++python3 tools/build.py -i "$CY" --syntakt "$ST" --os -o build/baseline.syx > "$LOG/baseline.log" 2>&1 || { tail -20 "$LOG/baseline.log"; echo "!! baseline build failed"; exit 1; }
++grep "SHA-256" "$LOG/baseline.log" | head -2
+ echo "== 5/6 generate the tweak"
+-python3 tools/gen_macro_ext.py --cycles "$CY" --eurorack vendor/eurorack 2>&1 | tee "$LOG/gen.log"
++python3 tools/gen_macro_ext.py --cycles "$CY" --eurorack vendor/eurorack > "$LOG/gen.log" 2>&1 || { tail -40 "$LOG/gen.log"; echo "!! generator failed (full log: $LOG/gen.log)"; exit 1; }
++tail -3 "$LOG/gen.log"
+ echo "== 6/6 build the test firmware (the OS recipe, the five engines replaced by macro-acid-ext-tg)"
+ LIST=$(python3 - <<'PY'
+ import json
+@@ -40,7 +44,7 @@ print(",".join(ids))
+ PY
+ )
+ echo "tweaks: $LIST"
+-python3 tools/build.py -i "$CY" --syntakt "$ST" -t "$LIST" -o build/Peaks-Sheep-Model-Cycles-Test.syx 2>&1 | tee "$LOG/build.log" | tail -8
++python3 tools/build.py -i "$CY" --syntakt "$ST" -t "$LIST" -o build/Peaks-Sheep-Model-Cycles-Test.syx > "$LOG/build.log" 2>&1 || { tail -30 "$LOG/build.log"; echo "!! firmware build failed (full log: $LOG/build.log)"; exit 1; }
++tail -8 "$LOG/build.log"
+ echo
+ echo "Done. Test firmware: build/Peaks-Sheep-Model-Cycles-Test.syx (experimental: not tested on a Model:Cycles)."
+-echo "Logs: $LOG/*.log  -- paste build/ext/gen.log and build/ext/build.log if anything failed."

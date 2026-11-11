@@ -1,0 +1,964 @@
+From c8ec779297467a6365e20737a4a76206e049d7c8 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sun, 1 Nov 2026 18:32:59 +0100
+Subject: [PATCH 1/3] MACRO: Peaks drums and Sheep as models after Braids
+ (host-proved, not built for the Cycles)
+
+Voices and glue (voices.h, peaks_glue.cc, sheep_glue.cc, sheep.h), a branch in macro.cc for SHAPE >= 47,
+host proofs against the original code (540 cases each), notes 74 and 75. Experimental: no m68k build, no
+emulation with the OS, not in os.json.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01PWz8WXy4iL498UCqpoSf7D
+---
+ notes/74-sheep-dans-macro.md          |  73 ++++++++++++
+ notes/75-peaks-et-sheep-dans-macro.md |  69 +++++++++++
+ notes/README.md                       |   2 +
+ tools/check_peaks_host.sh             |  11 ++
+ tools/check_sheep_host.sh             |  10 ++
+ tools/emu/peaks_ref.cc                |  62 ++++++++++
+ tools/emu/sheep_ref.cc                |  74 ++++++++++++
+ tools/machines/macro/macro.cc         |  43 ++++++-
+ tools/machines/macro/peaks_glue.cc    | 101 +++++++++++++++++
+ tools/machines/macro/sheep.h          | 157 ++++++++++++++++++++++++++
+ tools/machines/macro/sheep_glue.cc    |  52 +++++++++
+ tools/machines/macro/voices.h         |  30 +++++
+ 12 files changed, 682 insertions(+), 2 deletions(-)
+ create mode 100644 notes/74-sheep-dans-macro.md
+ create mode 100644 notes/75-peaks-et-sheep-dans-macro.md
+ create mode 100755 tools/check_peaks_host.sh
+ create mode 100755 tools/check_sheep_host.sh
+ create mode 100644 tools/emu/peaks_ref.cc
+ create mode 100644 tools/emu/sheep_ref.cc
+ create mode 100644 tools/machines/macro/peaks_glue.cc
+ create mode 100644 tools/machines/macro/sheep.h
+ create mode 100644 tools/machines/macro/sheep_glue.cc
+ create mode 100644 tools/machines/macro/voices.h
+
+diff --git a/notes/74-sheep-dans-macro.md b/notes/74-sheep-dans-macro.md
+new file mode 100644
+index 0000000..5e8cf9a
+--- /dev/null
++++ b/notes/74-sheep-dans-macro.md
+@@ -0,0 +1,73 @@
++# 74 — Sheep (le firmware alternatif de Tides) : étude de portage vers MACRO
++
++Demande d'un utilisateur (01/11/2026) : après Braids (MACRO, [43](43-machine-macro.md)), porter **Sheep**, le
++firmware alternatif de Tides d'Émilie Gillet (oscillateur à tables d'ondes, trois banques sur une grille 2D). État : la
++**voix** est portée et prouvée sur l'ordinateur ; l'intégration dans l'OS (machine, tweak, preuve Unicorn) n'est **pas**
++faite : elle demande l'OS officiel 1.13 et l'essai sur la machine. Rien n'entre dans `os.json`.
++
++## Réponse courte
++
++- **Sheep tourne tel quel sur le ColdFire** `[FAIT]` : le code est entièrement en entiers (aucun flottant), à **48 kHz,
++  la cadence du Cycles** (tables de `tides/resources.cc` calculées pour 48 kHz) : ni rééchantillonnage ni filtre
++  demi-bande comme pour Braids (96 kHz).
++- **Source** : `tides/generator.cc`, `Generator::ProcessWavetable`, compilation `WAVETABLE_HACK` du dépôt
++  `pichenettes/eurorack` (MIT, Émilie Gillet) ; ce n'est pas un dépôt à part. Tables : `wt_waves` (45 746 mots de 16
++  bits, 178 ondes de 257 points, ≈ 91,5 Ko), `ws_smooth_bipolar_fold`, `lut_cutoff`, `lut_increments` : ≈ 96 Ko au
++  total, à compiler telles quelles comme celles de Braids.
++- **La voix** `tools/machines/macro/sheep.h` (notre code, `sheep::Voice`) reprend l'arithmétique de `ProcessWavetable` en
++  retirant l'horloge, la PLL et le changement de banque sur front d'horloge (la banque devient un paramètre).
++  **540 cas, 640 échantillons chacun, identiques à l'échantillon près** au `Generator` d'origine
++  (`tools/check_sheep_host.sh <dépôt eurorack>`, `tools/emu/sheep_ref.cc`) : trois banques, six hauteurs (24 à 100
++  demi-tons), positions X/Y sur toute la plage, filtre et repli sur toute la plage `[FAIT]`.
++- **Pas encore fait** : brancher la voix sur la boucle des voix, l'essai en émulation avec l'OS entier, le coût en
++  instructions, l'essai sur la machine.
++
++## 1. Ce que fait Sheep `[FAIT]`
++
++Trois banques de 8×8 ondes (additive, quasi-PWM, ondes de WMAP de Braids), interpolées en continu en X et Y (SLOPE et
++SHAPE de Tides), suréchantillonnage ×4 puis deux filtres passe-bas à un pôle. SMOOTHNESS : au-dessus de 0, repli
++d'onde (`ws_smooth_bipolar_fold`) ; en dessous, passe-bas dont la coupure suit la hauteur. Sorties de Tides (1 bit,
++sous-octave carré) : hors sujet pour une machine.
++
++## 2. Proposition d'intégration `[HYP]`, à confirmer avec le demandeur
++
++Mettre Sheep **dans MACRO, pas dans une machine de plus** : l'OS n'accepte que 6 machines ajoutées ([43 §2](43-machine-macro.md)),
++et SHAPE choisit déjà un modèle (0..46). Trois modèles de plus, SHAPE 47, 48, 49 = SHEEP A, B, C (une banque chacun) :
++
++| Potard | Sur un modèle SHEEP |
++|---|---|
++| COLOR (TIMBRE) + CONTOUR | X de la grille (comme TIMBRE pour WAVE MAP) |
++| SWEEP (COLOR) | Y de la grille |
++| à décider | repli / passe-bas (SMOOTHNESS) : PUNCH est pris par l'ampli ; candidat : FINE ne convient pas (RATE/BITS) |
++| PITCH, DECAY, GATE | comme MACRO : note, chaîne d'ampli d'origine |
++
++Un trig appelle `Strike()` (phase à 0, comme un front de gate sur Tides). Bornes à modifier dans `macro.cc` : `MODELS`
++(47 → 50), le tableau `LITE` (−1 : ces modèles n'ont pas de version « allégée » ; ils tournent à 48 kHz sans filtre
++demi-bande, donc **moins chers** que les modèles de Braids rendus à 96 kHz), le rendu (`render` n'appelle pas `osc`
++pour ces modèles), `gen_macro.py` (compiler `tides/resources.cc` ; ≈ 96 Ko de plus dans la charge utile : à vérifier
++contre la limite de taille de l'image, cf. l'incident rc18 de Motor:Cycles), et la boucle de sortie 16 bits → Q31.
++
++Alternative : une machine séparée « SHEEP » si MACRO n'a plus de place dans la charge utile ; elle prendrait une des 6
++places et serait incompatible avec les moteurs du Syntakt (même emplacement `0x43000000`).
++
++## 3. À faire `[À FAIRE]`
++
++1. L'OS officiel 1.13 (non fourni ici, non versionné) : brancher `sheep::Voice` dans `macro_update` / `macro_render`.
++2. `tools/gen_macro.py` : ajouter `tides/resources.cc` (et `generator.cc` **non**) ; `--check`, `check_overlaps.py`.
++3. Preuve Unicorn `tools/emu/test_macro.py` : un cas par banque, contre `sheep_ref`, seul et avec tout l'OS ; mesure du
++   coût par bloc de 32 trames.
++4. Licence : MIT, mêmes mentions que Braids (Émilie Gillet) ; ajouter `tides/` à `THIRD-PARTY-NOTICES.md`,
++   `PROVENANCE.md`, `LICENSE-Braids` (ou `LICENSE-Tides`), `os.json` (`credit`, `license`) ; ne pas afficher le nom du
++   module ni de Mutable Instruments sur la machine ([43](43-machine-macro.md)).
++5. Statut `experimental` jusqu'à l'essai de Maxime sur sa machine ; aucune mention « testé » avant.
++
++## 4. Pièges relevés pendant la preuve `[FAIT]`
++
++- `Generator::Init()` ne remet pas à zéro la position X/Y : le Generator d'origine glisse depuis 0 au premier bloc.
++  Sur la machine on **colle** à la position cible au premier rendu (`snap`), pas de glissement de 0,7 ms au trig ; la
++  preuve désactive ce collage (`set_snap(false)`) pour comparer.
++- Le glissement divise un `uint16_t` par un `size_t` : division **non signée**, donc un X qui baisse arrondit vers le bas,
++  pas vers zéro. Reproduit tel quel.
++- Quand SMOOTHNESS > 0, `lut_cutoff[(f >> 7) + 1]` lit un mot au-delà de la table (513 entrées) : sans effet (multiplié par
++  une fraction nulle), conservé tel quel.
++- Dans la compilation Sheep, `GeneratorMode` **est** l'indice de banque (AD 0, LOOPING 1, AR 2).
+diff --git a/notes/75-peaks-et-sheep-dans-macro.md b/notes/75-peaks-et-sheep-dans-macro.md
+new file mode 100644
+index 0000000..ee131f3
+--- /dev/null
++++ b/notes/75-peaks-et-sheep-dans-macro.md
+@@ -0,0 +1,69 @@
++# 75 — Peaks (batteries) et Sheep dans MACRO : où les mettre, ce qui est prêt
++
++Demande d'un utilisateur (01/11/2026), suite de [74](74-sheep-dans-macro.md) : préparer les batteries de Peaks, et un fork
++de Modded Cycles avec, dans MACRO, après les 47 modèles de Braids : Peaks, puis Sheep. Question : machine à part ou
++modèles de MACRO ? État : **voix et passerelle prêtes et prouvées sur l'ordinateur ; rien de construit pour le Cycles**
++(pas de `m68k-elf-gcc` ici, pas d'OS officiel) ; rien dans `os.json`.
++
++## Réponse courte
++
++- **Peaks dans MACRO, pas en machine de plus** `[FAIT]` : l'écran MACHINES est plein (avec Model-TG, 14 repères
++  remplissent exactement les 2 lignes de 7, [54 §11.2](54-machine-acid.md)) ; une 15ᵉ machine demande de refaire
++  l'écran, les rangées et les descripteurs, pour un gain d'organisation que SHAPE donne déjà. Dans MACRO : SHAPE 47 à 50
++  = BASS DRUM, SNARE DRUM, HI-HAT, FM DRUM ; 51 à 53 = SHEEP A, B, C (dans cet ordre, comme demandé).
++- **Code de Peaks : MIT, entier, 48 kHz** `[FAIT]` : seul `peaks/test/peaks_test.cc` (banc de test) contient `float` ;
++  `peaks/drums/*.cc` est entier. Aucun rééchantillonnage.
++- **Charge** `[HYP, mesure sur PC, pas sur le Cycles]` : bass drum et FM drum ≈ 0,6 × une voix TONE, snare ≈ 1,2, hi-hat
++  ≈ 1,6 ; Sheep ≈ 2,1 (WAVE MAP de Braids : 3,5).
++- **Place : Peaks tient, Sheep non** `[HYP]` : l'image de l'OS finit à `0x401fbf51`, soit **16 559 o** avant la limite du
++  bootstrap (`0x40200000`, [52](52-registre-place-libre.md)). Peaks (code + tables utilisées) ≈ 11 Ko décompressé en
++  x86 `-Os` (3,7 Ko de code, 7,2 Ko de tables), ≈ 9 Ko compressé (zlib, proxy d'aPLib) : **tient, de justesse** ; à
++  mesurer avec `m68k-elf-gcc`. Les tables de Sheep (`wt_waves`, 178 ondes) font 91 Ko, 74 Ko compressées (une banque :
++  24 à 27 Ko) : **ne tient pas** sans libérer de la place (§3).
++
++## 1. Ce qui est prêt (`[FAIT]` sur l'ordinateur)
++
++| Fichier | Rôle |
++|---|---|
++| `tools/machines/macro/voices.h` | interface commune : `ext_init`, `ext_set`, `ext_render` ; modèles hors Braids, état de 256 o par piste |
++| `tools/machines/macro/peaks_glue.cc` | notre passerelle ; les batteries de Peaks sont les originales (`peaks/drums/`, `peaks/resources.cc`) |
++| `tools/machines/macro/sheep.h`, `sheep_glue.cc` | la voix de Sheep ([74](74-sheep-dans-macro.md)) ; compilée avec `-DMC_SHEEP` seulement |
++| `tools/machines/macro/macro.cc` | `MODELS` = 47 + `EXT_KINDS` ; SHAPE ≥ 47 : voix de Peaks / Sheep, sans RATE ni BITS, puis la chaîne d'ampli de TONE |
++| `tools/check_peaks_host.sh`, `tools/emu/peaks_ref.cc` | preuve : 540 cas, 200 blocs chacun, **identiques** aux batteries d'origine |
++| `tools/check_sheep_host.sh`, `tools/emu/sheep_ref.cc` | preuve de Sheep (540 cas identiques) |
++
++Les deux en-têtes de ressources (Braids, Peaks, Tides) définissent les mêmes macros (`LUT_SVF_CUTOFF` …) avec d'autres
++valeurs : chaque famille est donc dans **son** fichier `.cc`, derrière `voices.h`.
++
++### Potards des modèles hors Braids
++
++| Modèle | PITCH | COLOR (+ CONTOUR × enveloppe) | SWEEP | CONTOUR | DECAY |
++|---|---|---|---|---|---|
++| BASS DRUM | ± 7 demi-tons autour de la note 60 | TONE | PUNCH | — (enveloppe de COLOR) | DECAY de la batterie |
++| SNARE DRUM | idem | TONE | SNAPPY | idem | idem |
++| HI-HAT | — (aucun paramètre dans Peaks) | — | — | — | longueur par l'ampli de l'OS |
++| FM DRUM | la note (24 à 96) | FM | NOISE (au-dessus du milieu) / OVERDRIVE (en dessous) | idem | idem |
++| SHEEP A, B, C | la note | X de la grille | Y de la grille | quantité de repli (0 : rien) | ampli de l'OS |
++
++## 2. Pièges relevés `[FAIT]`
++
++- `HighHat::Init` et `FmDrum::Init` ne remettent pas tous leurs champs à zéro (les phases) : ils comptent sur une mémoire
++  à zéro ; `ext_init` met donc l'état à zéro avant (sinon le son dépend de ce qu'il y avait avant).
++- Snare, hi-hat et FM drum tirent dans **un seul** générateur (`stmlib::Random`) : sur le Cycles, une voix en tire pour les
++  autres ; le son d'une voix dépend des pistes jouées en même temps (jamais le cas en preuve : générateur ré-ensemencé).
++- La preuve compare à zéro de mémoire (`memset`) : c'est l'état d'un module qui démarre.
++
++## 3. À faire `[À FAIRE]` (demande l'OS 1.13 et `m68k-elf-gcc`)
++
++1. **Plan de la charge utile** : la zone de MACRO (`+0x42000..+0x5b000`, 102 400 o) contient déjà Braids (≈ 98 Ko) ; Peaks
++   (≈ 11 Ko) doit aller ailleurs (juste après ACID, `+0x78300`, ou un 3ᵉ morceau PACK) : `gen_macro.py`,
++   `gen_macro_syntakt.py`, `gen_acid_combos.py` partagent ce plan. Les variables : 6 pistes × (256 + 8) o de plus.
++2. `gen_macro.py` : `SOURCES` + `peaks/drums/*.cc`, `peaks/resources.cc` (le lien garde ce qui est utilisé :
++   `--gc-sections`, à vérifier), `peaks_glue.cc` ; `MODELS` / knob « Model » max 50 (puis 53 avec Sheep).
++3. **Sheep : libérer de la place**, au choix : une seule banque (≈ 25 Ko) en retirant un moteur du Syntakt (SY SWARM, par
++   exemple : environ le même ordre de taille) ; ou trois banques (≈ 74 Ko) en retirant plusieurs moteurs. Décision de
++   l'utilisateur : ce n'est pas gratuit.
++4. Preuve Unicorn (`tools/emu/test_macro.py`) : un cas par modèle, seul et avec tout l'OS, coût par bloc de 32 trames.
++5. Licences : MIT, Émilie Gillet : `THIRD-PARTY-NOTICES.md`, `PROVENANCE.md`, `LICENSE-Braids` (ou un fichier Peaks et un
++   fichier Tides), `os.json` (`credit`, `license`) ; ni le nom du module ni celui de Mutable Instruments sur la machine.
++6. Statut `experimental` jusqu'à l'essai sur la machine ; rien de « testé » avant.
+diff --git a/notes/README.md b/notes/README.md
+index 95f5dcd..c63da26 100644
+--- a/notes/README.md
++++ b/notes/README.md
+@@ -102,6 +102,8 @@ un seul OS, le Modded Cycles OS 2.0 (18/10/2026).
+ | [71-os-unique.md](71-os-unique.md) | **Un seul OS : le Modded Cycles OS 2.0** (décision de Maxime, 18/10/2026) : `os.json` remplace les cartes à cocher ; composition (Model-TG, écoute des samples, 5 moteurs du Syntakt, MACRO, ACID, LFO 2/3/4, arpégiateur, trig hold, tempo 546, animation, navigateur, volume/pan, trigless, MIDI OUT + THRU), machines à numéros fixes 07 à 14, MAIN OS `a87e70d0…` ; hors OS : 6 canaux USB (mix stéréo gardé), filtre par piste, OS optimisé, `midi-both` ; **Chord Keys retiré** ; `gen_flasher_tweaks.py`, `ref_mainos.py`, `build.py --os`, page et smoke réécrits ; statut `experimental` jusqu'à l'essai de ce firmware précis |
+ | [72-reglages-des-mods.md](72-reglages-des-mods.md) | **Mod Settings : une page de réglages des mods, et l'audio USB en 2CH ou 6CH** (Maxime, 19/10/2026, issue #82) : 9ᵉ ligne « Mods » du Config Menu (`0x4003c134`, épilogue `0x4003c99a`), page `MenuView` « Mod Settings », ligne USB Audio ; enregistrement « MODS » de 16 o en `0x404e9b80`, dans les 272 o de réglages sauvegardés hors CRC ; en 6CH les 15 modifications de `6ch-usbup` faites en mémoire (démarrage par `0x4000576c`, bascule USB arrêtée par `0x40004d9a`/`0x40004db4`, indices des rings à zéro, caches poussés), en 2CH le pilote d'origine ; champ `runtime` vérifié par `check_overlaps.py` ; **testé sur la machine le 19/10/2026** |
+ | [73-step-record.md](73-step-record.md) | **Step record : les notes d'un pattern pas à pas** (Maxime, 20/10/2026) : double appui sur REC à l'arrêt (`TransportView` `0x4002439a`, codes 9/10/11, drapeau de double appui) ; chaque note jouée (message de type 12, gestionnaire `0x40007000`) écrite comme le live rec (`0x40012158`) sur notre pas ; potards par le drapeau « enregistrer » du setter `0x4000ba7a` (mot du son en +20 + 2k), p-locks par `0x4001646a`, son rétabli ; LED posées avant les vues (`0x40006a76`), tick 30 Hz (`0x400081e4`) ; variables en `0x4233e800` ; preuve sur un vrai projet (`0x4000ea3a`, `0x40061738`), mémoire = celle du live rec ; **testé sur la machine le 20/10/2026** |
++| [74-sheep-dans-macro.md](74-sheep-dans-macro.md) | **Sheep (firmware alternatif de Tides) dans MACRO : étude de portage** (demande d'utilisateur, 01/11/2026) : code entier à 48 kHz (cadence du Cycles, pas de rééchantillonnage), source `tides/generator.cc` `ProcessWavetable` (MIT) ; voix `tools/machines/macro/sheep.h` **identique à l'échantillon près** au Generator d'origine sur 540 cas (`tools/check_sheep_host.sh`) ; intégration proposée : 3 modèles de plus dans MACRO (SHAPE 47–49) plutôt qu'une 7ᵉ machine ; ≈ 96 Ko de tables ; **pas intégré à l'OS** : il faut l'OS 1.13, la preuve Unicorn et l'essai sur la machine |
++| [75-peaks-et-sheep-dans-macro.md](75-peaks-et-sheep-dans-macro.md) | **Peaks (4 batteries) et Sheep dans MACRO** (demande d'utilisateur, 01/11/2026) : modèles SHAPE 47 à 53 plutôt qu'une 15ᵉ machine (écran MACHINES plein) ; `voices.h`, `peaks_glue.cc`, `sheep_glue.cc`, branche dans `macro.cc` ; preuves sur l'ordinateur identiques aux originaux (540 cas chacune) ; Peaks tient dans les 16,5 Ko libres, **Sheep (74 Ko) non** sans retirer des moteurs ; rien de construit pour le Cycles |
+ | [30-regulateur-charge-soutenue.md](30-regulateur-charge-soutenue.md) | **Régulateur : couper sur la charge soutenue** : relevé v8 en 6 canaux (91/71, dernière piste toujours coupée) ; le régulateur réagissait aux moments denses (5 ms) et aux blocs au-dessus de 90 % ; nouvelle règle : moyenne lente (170 ms) à 86 %, pic à 93 % (retour sous 89 %), voix du Syntakt plus comptées pour moitié ; diagnostic v9 |
+ | [29-voix-syntakt-en-sram.md](29-voix-syntakt-en-sram.md) | **Les états des voix du Syntakt en SRAM** : relevés v7 (une voix du Syntakt coûte autant qu'une voix d'origine ; 6 pistes ≈ 88 %, coupures de temps en temps) ; les 6 états de voix (1 800 o) passent en SRAM ; modèle : −3 points de bloc ; diagnostic v8 (pic/moyenne) |
+ | [28-code-syntakt-en-sram.md](28-code-syntakt-en-sram.md) | **Le code du Syntakt en SRAM** : relevés du diagnostic v6 (chaque voix du Syntakt ajoute 9 à 13 points, l'interface reste fluide) ; les 30 tables d'ondes de CHORD passent dans la charge utile, leur place en SRAM reçoit le code du Syntakt et 3 de ses tables ; régulateur à 86 % ; identique en émulation ; modèle : boucle des voix de 63,5 à 52 % avec 5 moteurs différents ; diagnostic v7 |
+diff --git a/tools/check_peaks_host.sh b/tools/check_peaks_host.sh
+new file mode 100755
+index 0000000..e035e07
+--- /dev/null
++++ b/tools/check_peaks_host.sh
+@@ -0,0 +1,11 @@
++#!/bin/sh
++# Proves tools/machines/macro/peaks_glue.cc against the original Peaks drums, on the host (no Elektron file needed).
++# usage: tools/check_peaks_host.sh <pichenettes/eurorack checkout, with stmlib>
++set -e
++MI=${1:?path to a pichenettes/eurorack checkout (with the stmlib submodule)}
++HERE=$(cd "$(dirname "$0")" && pwd)
++OUT=$(mktemp -d)
++g++ -O1 -std=c++14 -I"$MI" -I"$HERE/machines/macro" -o "$OUT/peaks_ref" \
++    "$HERE/emu/peaks_ref.cc" "$HERE/machines/macro/peaks_glue.cc" "$MI"/peaks/drums/*.cc "$MI/peaks/resources.cc" \
++    "$MI/stmlib/utils/random.cc"
++"$OUT/peaks_ref"
+diff --git a/tools/check_sheep_host.sh b/tools/check_sheep_host.sh
+new file mode 100755
+index 0000000..d6df866
+--- /dev/null
++++ b/tools/check_sheep_host.sh
+@@ -0,0 +1,10 @@
++#!/bin/sh
++# Proves tools/machines/macro/sheep.h against the original Tides code, on the host (no Elektron file needed).
++# usage: tools/check_sheep_host.sh <pichenettes/eurorack checkout, with stmlib>
++set -e
++MI=${1:?path to a pichenettes/eurorack checkout (with the stmlib submodule)}
++HERE=$(cd "$(dirname "$0")" && pwd)
++OUT=$(mktemp -d)
++g++ -O1 -std=c++14 -DWAVETABLE_HACK -I"$MI" -I"$HERE/machines/macro" -o "$OUT/sheep_ref" \
++    "$HERE/emu/sheep_ref.cc" "$MI/tides/generator.cc" "$MI/tides/resources.cc"
++"$OUT/sheep_ref" | tail -${TAIL:-5}
+diff --git a/tools/emu/peaks_ref.cc b/tools/emu/peaks_ref.cc
+new file mode 100644
+index 0000000..d38af68
+--- /dev/null
++++ b/tools/emu/peaks_ref.cc
+@@ -0,0 +1,62 @@
++// Host proof for the Peaks glue (tools/machines/macro/peaks_glue.cc): the same drum, driven directly with the
++// parameter values the glue is documented to set, against ext_render. Build: tools/check_peaks_host.sh <eurorack>
++#include <cstdio>
++#include <cstring>
++#include <cstdlib>
++#include "peaks/drums/bass_drum.h"
++#include "peaks/drums/snare_drum.h"
++#include "peaks/drums/fm_drum.h"
++#include "peaks/drums/high_hat.h"
++#include "stmlib/utils/random.h"
++#include "voices.h"
++
++using namespace peaks;
++static int bad = 0;
++
++template <class D> static void run_ref(D &d, int blocks, short *out) {
++  GateFlags g[32];
++  for (int b = 0; b < blocks; ++b) {
++    for (int i = 0; i < 32; ++i) g[i] = (b == 0 && i == 0) ? (GATE_FLAG_HIGH | GATE_FLAG_RISING) : GATE_FLAG_LOW;
++    d.Process(g, out + b * 32, 32);
++  }
++}
++
++int main() {
++  // Direct comparison per kind
++  const int notes[] = {50 << 7, 60 << 7, (67 << 7) + 40};
++  const int ks[] = {0, 8000, 16383, 25000, 32766};
++  const int decs[] = {0, 40, 127};
++  static short r[200 * 32], m[200 * 32];
++  alignas(16) static unsigned char st[EXT_BYTES];
++  long checked = 0, loud = 0;
++  for (int kind = 0; kind < 4; ++kind)
++    for (unsigned n = 0; n < 3; ++n)
++      for (unsigned ia = 0; ia < 5; ++ia)
++        for (unsigned ib = 0; ib < 5; ib += 2)
++          for (unsigned id = 0; id < 3; ++id) {
++            int note = notes[n] & 0x3fff, a = ks[ia], b = ks[ib], dec = decs[id];
++            stmlib::Random::Seed(0x12345678 + kind);  // the drums share one noise generator: same start for both runs
++            memset(st, 0, sizeof st);
++            ext_init(st, kind);
++            ext_set(st, kind, note, a, b, 0, dec);
++            for (int bl = 0; bl < 200; ++bl) ext_render(st, kind, bl == 0, m + bl * 32, 32);
++            uint16_t ua = a * 2, ub = b * 2, ud = dec * 516;
++            int d7 = note - (60 << 7); d7 = d7 < -(7 << 7) ? -(7 << 7) : (d7 > (7 << 7) ? 7 << 7 : d7);
++            int16_t tr = (int16_t)(d7 * 32768 / 896 < -32767 ? -32767 : (d7 * 32768 / 896 > 32767 ? 32767 : d7 * 32768 / 896));
++            stmlib::Random::Seed(0x12345678 + kind);
++            if (kind == 0) { static BassDrum d; memset((void*)&d, 0, sizeof d); d.Init(); d.set_frequency(tr); d.set_tone(ua); d.set_punch(ub); d.set_decay(ud); run_ref(d, 200, r); }
++            if (kind == 1) { static SnareDrum d; memset((void*)&d, 0, sizeof d); d.Init(); d.set_frequency(tr); d.set_tone(ua); d.set_snappy(ub); d.set_decay(ud); run_ref(d, 200, r); }
++            if (kind == 2) { static HighHat d; memset((void*)&d, 0, sizeof d); d.Init(); run_ref(d, 200, r); }
++            if (kind == 3) {
++              static FmDrum d; memset((void*)&d, 0, sizeof d); d.Init(); d.set_sd_range(false);
++              int fr = (note - (24 << 7)) * 65535 / (72 << 7); fr = fr < 0 ? 0 : (fr > 65535 ? 65535 : fr);
++              d.set_frequency((uint16_t)fr); d.set_fm_amount(ua); d.set_noise(ub); d.set_decay(ud); run_ref(d, 200, r);
++            }
++            ++checked;
++            if (memcmp(r, m, sizeof r)) { ++bad; printf("FAIL kind=%d note=%d a=%d b=%d dec=%d\n", kind, note, a, b, dec); }
++            int peak = 0; for (int i = 0; i < 200 * 32; ++i) { int v = abs(m[i]); if (v > peak) peak = v; }
++            if (peak > 2000) ++loud;
++          }
++  printf("%ld cases, %ld with a clear signal (peak > 2000), %d mismatch(es)\n", checked, loud, bad);
++  return bad != 0;
++}
+diff --git a/tools/emu/sheep_ref.cc b/tools/emu/sheep_ref.cc
+new file mode 100644
+index 0000000..615823c
+--- /dev/null
++++ b/tools/emu/sheep_ref.cc
+@@ -0,0 +1,74 @@
++// Host proof for the SHEEP voice (tools/machines/macro/sheep.h): the original Tides Generator, built with
++// WAVETABLE_HACK (= Sheep), against sheep::Voice, sample for sample, free-running, 16-sample blocks.
++// Build and run: tools/check_sheep_host.sh <path to a pichenettes/eurorack checkout>
++#include <cstdio>
++#include <cstdlib>
++#include <cstring>
++#include <vector>
++#include "tides/generator.h"
++#include "sheep.h"
++
++using namespace tides;
++
++static Generator g_ref;  // static storage: zeroed, like the global Generator on the module
++
++static bool run_case(int pitch, int x, int y, int fold, int bank, int blocks) {
++  memset(&g_ref, 0, sizeof(g_ref));  // Init() does not clear the glide position: start from the zeroed state of a fresh module
++  g_ref.Init();
++  g_ref.set_range(GENERATOR_RANGE_HIGH);
++  g_ref.set_sync(false);
++  g_ref.set_pitch(pitch);
++  g_ref.set_shape(y);
++  g_ref.set_slope(x);
++  g_ref.set_smoothness(fold);
++  // GeneratorMode is the bank index in the WAVETABLE_HACK build: AD = 0, LOOPING = 1, AR = 2
++  g_ref.set_mode(static_cast<GeneratorMode>(bank));
++  const int n = blocks * kBlockSize;
++  std::vector<int> ref, mine(n);
++  for (int i = 0; i < n + 64; ++i) {
++    ref.push_back(g_ref.Process(0).bipolar);
++    if (((i + 1) % kBlockSize) == 0) g_ref.Process();
++  }
++
++  sheep::Voice v;
++  v.Init();
++  v.set_snap(false);
++  std::vector<int16_t> out(kBlockSize);
++  for (int b = 0; b < blocks; ++b) {
++    // pitch_ inside Tides is the pitch we gave plus one octave
++    v.Render(pitch + 12 * 128, x, y, fold, bank, out.data(), kBlockSize);
++    for (int i = 0; i < (int)kBlockSize; ++i) mine[b * kBlockSize + i] = out[i];
++  }
++  // Tides' double buffer plays three blocks of silence before the first rendered one: the port starts 48 samples earlier
++  const int lag = 3 * kBlockSize;
++  bool same = true;
++  int nonzero = 0;
++  for (int i = 0; i < n; ++i) {
++    if (ref[i + lag] != mine[i]) same = false;
++    if (mine[i]) ++nonzero;
++  }
++  if (same) {
++    printf("OK    pitch=%5d x=%6d y=%6d fold=%6d bank=%d  %d samples identical (%d non-zero)\n", pitch, x, y, fold, bank, n, nonzero);
++    return true;
++  }
++  int first = -1;
++  for (int i = 0; i < n; ++i) if (ref[i + lag] != mine[i]) { first = i; break; }
++  printf("FAIL  pitch=%5d x=%6d y=%6d fold=%6d bank=%d  first difference at sample %d (ref %d, port %d)\n", pitch, x, y, fold, bank, first, first < 0 ? 0 : ref[first + lag], first < 0 ? 0 : mine[first]);
++  return false;
++}
++
++int main() {
++  int bad = 0;
++  const int pitches[] = {24 * 128, 48 * 128, 57 * 128 + 37, 69 * 128, 84 * 128 + 5, 100 * 128};
++  const int xs[] = {-32768, -9000, 0, 12345, 32767};
++  const int folds[] = {-32768, -20000, -8000, 0, 9000, 32767};
++  for (int bank = 0; bank < 3; ++bank)
++    for (unsigned p = 0; p < sizeof(pitches) / sizeof(*pitches); ++p)
++      for (unsigned k = 0; k < sizeof(xs) / sizeof(*xs); ++k)
++        for (unsigned f = 0; f < sizeof(folds) / sizeof(*folds); ++f) {
++          int x = xs[k], y = xs[(k * 2 + p) % 5];
++          if (!run_case(pitches[p] - 12 * 128, x, y, folds[f], bank, 40)) ++bad;
++        }
++  printf(bad ? "%d case(s) FAILED\n" : "all cases identical\n", bad);
++  return bad != 0;
++}
+diff --git a/tools/machines/macro/macro.cc b/tools/machines/macro/macro.cc
+index 5d575f1..4bd9e19 100644
+--- a/tools/machines/macro/macro.cc
++++ b/tools/machines/macro/macro.cc
+@@ -41,6 +41,7 @@
+ #include <new>
+ 
+ #include "braids/macro_oscillator.h"
++#include "voices.h"                               /* Peaks drums, Sheep (notes/75): models after the 47 of Braids */
+ 
+ typedef signed char s8;
+ typedef short s16;
+@@ -60,7 +61,8 @@ typedef unsigned int u32;
+ #define V32(o)      (*(s32 *)(v + (o)))
+ #define P16(o)      (*(const s16 *)(p + (o)))
+ 
+-#define MODELS      47                               /* CSAW .. DIGITAL_MODULATION (sans QUESTION_MARK) */
++#define BRAIDS_MODELS 47                             /* CSAW .. DIGITAL_MODULATION (sans QUESTION_MARK) */
++#define MODELS      (BRAIDS_MODELS + EXT_KINDS)      /* puis BASS DRUM, SNARE DRUM, HI-HAT, FM DRUM (Peaks), SHEEP A, B, C */
+ #define HIST        22                               /* echantillons du bloc precedent pour le filtre */
+ #define IDLE_LEVEL  (1 << 14)                        /* enveloppe d'ampli sous -102 dB : voix muette */
+ #define ONE         (1 << 24)                        /* RATE : un echantillon (Q24) */
+@@ -83,6 +85,9 @@ struct Track {
+ 	u32 ph;                                          /* 48 kHz ou moins : phase du rendu (Q24) */
+ 	u32 hph;                                         /* echantillonneur-bloqueur : sa phase (Q24) */
+ 	s32 cur;                                         /* RATE : echantillon tenu */
++	s32 ext;                                         /* modele hors Braids en cours (0..EXT_KINDS-1), -1 : un modele de Braids */
++	s32 strike;                                      /* modele hors Braids : un trig au prochain rendu */
++	alignas(4) unsigned char xs[EXT_BYTES];          /* son etat (voices.h) */
+ };
+ 
+ /* pas de constructeurs globaux (rien ne les appellerait) : placement new a l'initialisation de la piste */
+@@ -95,7 +100,7 @@ static const s16 HB[6] = { 10327, -3131, 1579, -820, 434, -197 };
+ 
+ /* modeles alleges, rendus a 48 kHz (notes/55) : ce que le modele ajoute au-dessus de sa note (1/128 de demi-ton :
+  * desaccord des TRIPLE jusqu'a 24 demi-tons, accords de WAVE PARAPHONIC jusqu'a 19 demi-tons + 5) ; -1 : 96 kHz */
+-static const s16 LITE[MODELS] = {
++static const s16 LITE[BRAIDS_MODELS] = {
+ 	0, -1, 0, -1, -1, 0, 0, -1, -1,                  /* CSAW, SAW_SQUARE, SQUARE_SUB, SAW_SUB */
+ 	3072, 3072, 3072, 3072,                          /* TRIPLE_SAW, _SQUARE, _TRIANGLE, _SINE */
+ 	-1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+@@ -147,6 +152,8 @@ extern "C" void macro_update(s32 pmod, char *v, const char *p)
+ 		tr->mode = -1;
+ 		tr->ph = tr->hph = ONE - 1;              /* le 1er echantillon sort tout de suite */
+ 		tr->cur = 0;
++		tr->ext = -1;
++		tr->strike = 0;
+ 		V32(MARK_OFF) = MARK;
+ 	}
+ 	/* chaine d'ampli d'origine, reglee comme TONE (0x400aa7b8) */
+@@ -170,6 +177,26 @@ extern "C" void macro_update(s32 pmod, char *v, const char *p)
+ 
+ 	shape = P16(0x18) >> 8;
+ 	shape = shape < 0 ? 0 : (shape >= MODELS ? MODELS - 1 : shape);
++	if (shape >= BRAIDS_MODELS) {                    /* Peaks, Sheep (notes/75) : un rendu de 32 trames a 48 kHz, sans RATE ni BITS */
++		s32 kind = shape - BRAIDS_MODELS;
++		if (tr->ext != kind) {                   /* nouveau modele : etat remis a zero */
++			ext_init(tr->xs, kind);
++			tr->ext = kind;
++			tr->strike = 0;
++		}
++		n = ((s32)P16(0x14) << 8) - (64 << 16) + pmod;
++		n = n < 0 ? 0 : (n > (127 << 16) ? 127 << 16 : n);
++		n >>= 9;                                 /* 1/128 de demi-ton, 440 Hz a 69, comme Braids */
++		env = V32(0x38) ? 32767 : (s32)(mag(V32(0x230)) >> 16);
++		env = env > 32767 ? 32767 : env;
++		timbre = knob(P16(0x16)) + ((env * knob(P16(0x1c))) >> 15);
++		timbre = timbre > 32767 ? 32767 : timbre;
++		ext_set(tr->xs, kind, n, timbre, knob(P16(0x1a)), knob(P16(0x1c)), dec);
++		if (V32(0x38))
++			tr->strike = 1;
++		return;
++	}
++	tr->ext = -1;
+ 	tr->osc.set_shape(static_cast<braids::MacroOscillatorShape>(shape));
+ 
+ 	/* FINE (FUNC + PITCH) : RATE en dessous de 64, BITS au-dessus */
+@@ -227,6 +254,18 @@ extern "C" void macro_render(s32 *out, char *v)
+ 			out[i] = 0;
+ 		return;
+ 	}
++	if (tr->ext >= 0) {                              /* Peaks, Sheep : 32 trames a 48 kHz (voices.h), pleine echelle -> 1/2 (Q31) */
++		s16 b[32];
++		ext_render(tr->xs, tr->ext, tr->strike, b, 32);
++		tr->strike = 0;
++		for (i = 0; i < 32; i++)
++			out[i] = (s32)b[i] << 15;
++		tr->mode = -1;                           /* au retour a un modele de Braids : rendu repris de zero */
++		AMP_ENV(v);
++		VCA(out, v);
++		PUNCH(out, v);
++		return;
++	}
+ 	if (tr->want != tr->mode) {                      /* changement de rendu : on repart de zero */
+ 		for (i = 0; i < HIST; i++)
+ 			tr->x[i] = 0;
+diff --git a/tools/machines/macro/peaks_glue.cc b/tools/machines/macro/peaks_glue.cc
+new file mode 100644
+index 0000000..c8ddaed
+--- /dev/null
++++ b/tools/machines/macro/peaks_glue.cc
+@@ -0,0 +1,101 @@
++/*
++ * Peaks' drum voices as MACRO models (notes/75): BASS DRUM, SNARE DRUM, HI-HAT, FM DRUM, from the module Peaks by
++ * Emilie Gillet (MIT, pichenettes/eurorack, peaks/drums/ and peaks/resources.cc, compiled as is). Integer code at 48 kHz,
++ * the Cycles' rate: no resampling. This file is our glue; the voices are the originals.
++ *
++ * Knobs (COLOR a, SWEEP b, PITCH = note, DECAY = decay; CONTOUR unused):
++ *   BASS DRUM  : PITCH +-7 semitones around the drum's own pitch (note 60 = centre), a TONE, b PUNCH
++ *   SNARE DRUM : PITCH +-7 semitones around the drum's own pitch (note 60 = centre), a TONE, b SNAPPY
++ *   HI-HAT     : no parameter in Peaks (a, b, decay unused: the amp chain of the OS shapes the length)
++ *   FM DRUM    : PITCH = the note (24..96), a FM amount, b NOISE (above half) / OVERDRIVE (below half)
++ * DECAY also drives the drum's own decay (Peaks' DECAY), on top of the OS amp envelope.
++ */
++#include <new>
++#include <stdint.h>
++#include <string.h>
++
++#include "peaks/drums/bass_drum.h"
++#include "peaks/drums/snare_drum.h"
++#include "peaks/drums/fm_drum.h"
++#include "peaks/drums/high_hat.h"
++
++#include "voices.h"
++
++using namespace peaks;
++
++union PeaksVoice {
++	BassDrum bass;
++	SnareDrum snare;
++	HighHat hat;
++	FmDrum fm;
++	PeaksVoice() { }
++	~PeaksVoice() { }
++};
++static_assert(sizeof(PeaksVoice) <= EXT_BYTES, "EXT_BYTES too small for the Peaks drums");
++
++static inline PeaksVoice *V(void *st) { return reinterpret_cast<PeaksVoice *>(st); }
++
++static inline int clampi(int x, int lo, int hi) { return x < lo ? lo : (x > hi ? hi : x); }
++
++/* +-7 semitones around note 60, as the 16-bit frequency parameter of the bass and snare drums */
++static inline int16_t transpose(int note)
++{
++	int d = clampi(note - (60 << 7), -(7 << 7), 7 << 7);
++	return static_cast<int16_t>(clampi(d * 32768 / 896, -32767, 32767));
++}
++
++extern "C" void ext_init(void *st, int kind)
++{
++	/* HighHat::Init and FmDrum::Init leave some fields alone (phases): they expect zeroed memory, as on a fresh module */
++	memset(st, 0, EXT_BYTES);
++	switch (kind) {
++	case 0: new (&V(st)->bass) BassDrum; V(st)->bass.Init(); break;
++	case 1: new (&V(st)->snare) SnareDrum; V(st)->snare.Init(); break;
++	case 2: new (&V(st)->hat) HighHat; V(st)->hat.Init(); break;
++	case 3: new (&V(st)->fm) FmDrum; V(st)->fm.Init(); V(st)->fm.set_sd_range(false); break;
++	}
++}
++
++extern "C" void ext_set(void *st, int kind, int note, int a, int b, int c, int decay)
++{
++	(void)c;
++	uint16_t ua = static_cast<uint16_t>(a * 2), ub = static_cast<uint16_t>(b * 2);
++	uint16_t dec = static_cast<uint16_t>(clampi(decay, 0, 127) * 516);
++	switch (kind) {
++	case 0:
++		V(st)->bass.set_frequency(transpose(note));
++		V(st)->bass.set_tone(ua);
++		V(st)->bass.set_punch(ub);
++		V(st)->bass.set_decay(dec);
++		break;
++	case 1:
++		V(st)->snare.set_frequency(transpose(note));
++		V(st)->snare.set_tone(ua);
++		V(st)->snare.set_snappy(ub);
++		V(st)->snare.set_decay(dec);
++		break;
++	case 3:
++		V(st)->fm.set_frequency(static_cast<uint16_t>(clampi((note - (24 << 7)) * 65535 / (72 << 7), 0, 65535)));
++		V(st)->fm.set_fm_amount(ua);
++		V(st)->fm.set_noise(ub);
++		V(st)->fm.set_decay(dec);
++		break;
++	}
++}
++
++extern "C" void ext_render(void *st, int kind, int strike, short *out, int n)
++{
++	GateFlags gate[64];
++	if (n > 64)
++		n = 64;
++	for (int i = 0; i < n; i++)
++		gate[i] = GATE_FLAG_LOW;
++	if (strike)
++		gate[0] = GATE_FLAG_HIGH | GATE_FLAG_RISING;
++	switch (kind) {
++	case 0: V(st)->bass.Process(gate, out, n); break;
++	case 1: V(st)->snare.Process(gate, out, n); break;
++	case 2: V(st)->hat.Process(gate, out, n); break;
++	case 3: V(st)->fm.Process(gate, out, n); break;
++	}
++}
+diff --git a/tools/machines/macro/sheep.h b/tools/machines/macro/sheep.h
+new file mode 100644
+index 0000000..137d39e
+--- /dev/null
++++ b/tools/machines/macro/sheep.h
+@@ -0,0 +1,157 @@
++/*
++ * SHEEP : the wavetable oscillator of Sheep, the alternative Tides firmware by Emilie Gillet (MIT, repository
++ * pichenettes/eurorack, tides/generator.cc, ProcessWavetable, the WAVETABLE_HACK build).
++ *
++ * This file is our code: a free-running voice, with Tides' clock, PLL and bank-on-clock behaviour removed (the bank
++ * is a parameter). The arithmetic is the one of ProcessWavetable, line for line, so the output is the same
++ * samples; tools/emu/sheep_ref.cc and tools/check_sheep_host.sh prove it against the original Generator.
++ * The tables (tides/resources.cc: wt_waves, ws_smooth_bipolar_fold, lut_cutoff, lut_increments) are compiled as is.
++ *
++ * Rate: 48 kHz, the Model:Cycles' own rate (Tides' tables are made for 48 kHz): no resampling.
++ * Pitch: 1/128 semitone, 440 Hz at 69, the Cycles' convention (Tides' lut_increments is built the same way).
++ * Integer only, no FPU: about 4 table reads and 8 multiplies per output sample, times the 4x oversampling.
++ */
++#ifndef MC_SHEEP_H_
++#define MC_SHEEP_H_
++
++#include <stdint.h>
++
++#include "stmlib/utils/dsp.h"
++#include "tides/resources.h"
++
++namespace sheep {
++
++using namespace tides;  // the resource tables of tides/resources.h
++
++/* Tides' 4x oversampling decimator weights (generator.cc, kDownsampleCoefficient) */
++static const int32_t kDownsample[4] = { 17162, 19069, 17162, 12140 };
++
++const int kBanks = 3;
++const int kWaveSize = 257;
++
++class Voice {
++ public:
++  void Init() {
++    phase_ = 0;
++    x_ = y_ = 0;
++    lp_[0] = lp_[1] = 0;
++    first_ = true;
++    snap_ = true;
++  }
++
++  /* host proof only: start the position at 0 and glide, as the zeroed Tides Generator does */
++  void set_snap(bool snap) { snap_ = snap; }
++
++  /* A trig restarts the cycle, as a gate edge does on Tides. */
++  void Strike() { phase_ = 0; }
++
++  /* pitch  : note in 1/128 semitone (Tides' own pitch_, i.e. already including its +1 octave if you want parity)
++   * x, y   : position in the wave map, -32768..32767 (Tides' SLOPE and SHAPE)
++   * fold   : -32768..32767 (Tides' SMOOTHNESS): above 0 wavefolder, below 0 low-pass filter
++   * bank   : 0 additive harmonics, 1 PWM-ish, 2 Braids' WMAP waves
++   * out    : size samples, 16 bit */
++  void Render(int pitch, int x, int y, int fold, int bank, int16_t* out, int size) {
++    uint32_t phase_increment = PhaseIncrement(pitch);
++
++    /* The grid is 8x8 rather than 9x9, so the position is scaled by 7/8. */
++    uint16_t target_x = static_cast<uint16_t>(x + 32768);
++    target_x = target_x * 57344 >> 16;
++    uint16_t target_y = static_cast<uint16_t>(y + 32768);
++    target_y = target_y * 57344 >> 16;
++    if (first_ && snap_) {  /* no glide from 0 on the first block */
++      x_ = target_x;
++      y_ = target_y;
++    }
++    first_ = false;
++    uint16_t px = x_, py = y_;
++    /* unsigned division, as in Tides (size_t): a falling position floors instead of truncating */
++    uint16_t x_increment = static_cast<uint32_t>(target_x - px) / static_cast<uint32_t>(size);
++    uint16_t y_increment = static_cast<uint32_t>(target_y - py) / static_cast<uint32_t>(size);
++
++    int32_t wf_gain = fold > 0 ? fold : 0;
++    wf_gain = wf_gain * wf_gain >> 15;
++
++    int32_t frequency = CutoffFrequency(pitch, fold);
++    int32_t f_a = lut_cutoff[frequency >> 7] >> 16;
++    int32_t f_b = lut_cutoff[(frequency >> 7) + 1] >> 16;
++    int32_t f = f_a + ((f_b - f_a) * (frequency & 0x7f) >> 7);
++    int32_t lp0 = lp_[0], lp1 = lp_[1];
++
++    const int16_t* bank_base = wt_waves + bank * 64 * kWaveSize - (bank & 2) * 4 * kWaveSize;
++    uint32_t phase = phase_;
++    while (size--) {
++      px += x_increment;
++      py += y_increment;
++      uint16_t x_integral = px >> 13;
++      uint16_t y_integral = py >> 13;
++      const int16_t* wave_1 = &bank_base[(x_integral + y_integral * 8) * kWaveSize];
++      const int16_t* wave_2 = wave_1 + kWaveSize * 8;
++      uint16_t x_fractional = px << 3;
++      int32_t y_fractional = (py << 2) & 0x7fff;
++
++      int32_t s = 0;
++      for (int32_t subsample = 0; subsample < 4; ++subsample) {
++        int32_t y_1 = stmlib::Crossfade(wave_1, wave_1 + kWaveSize, phase << 1, x_fractional);
++        int32_t y_2 = stmlib::Crossfade(wave_2, wave_2 + kWaveSize, phase << 1, x_fractional);
++        int32_t y_mix = y_1 + ((y_2 - y_1) * y_fractional >> 15);
++        int32_t folded = stmlib::Interpolate1022(ws_smooth_bipolar_fold, (y_mix + 32768) << 16);
++        y_mix = y_mix + ((folded - y_mix) * wf_gain >> 15);
++        s += y_mix * kDownsample[subsample];
++        phase += (phase_increment >> 3);
++      }
++      lp0 += f * ((s >> 16) - lp0) >> 15;
++      lp1 += f * (lp0 - lp1) >> 15;
++      *out++ = static_cast<int16_t>(lp1);
++    }
++    phase_ = phase;
++    x_ = px;
++    y_ = py;
++    lp_[0] = lp0;
++    lp_[1] = lp1;
++  }
++
++ private:
++  static uint32_t PhaseIncrement(int pitch) {
++    int num_shifts = 0;
++    const int kOct = 12 * 128;
++    if (pitch < 0) pitch = 0;
++    if (pitch > 120 << 7) pitch = 120 << 7;  /* Tides clamps pitch_ to 0..120 semitones */
++    while (pitch >= kOct) {
++      pitch -= kOct;
++      ++num_shifts;
++    }
++    uint32_t a = lut_increments[pitch >> 4];
++    uint32_t b = lut_increments[(pitch >> 4) + 1];
++    uint32_t inc = a + ((b - a) * (pitch & 0xf) >> 4);
++    return inc << num_shifts;
++  }
++
++  static int32_t CutoffFrequency(int pitch, int smoothness) {
++    int32_t frequency;
++    if (pitch < 0) pitch = 0;
++    if (pitch > 120 << 7) pitch = 120 << 7;
++    if (smoothness > 0) {
++      frequency = 256 << 7;
++    } else if (smoothness > -16384) {
++      int32_t start = pitch + (36 << 7);
++      int32_t end = 256 << 7;
++      frequency = start + ((end - start) * (smoothness + 16384) >> 14);
++    } else {
++      int32_t start = pitch - (36 << 7);
++      int32_t end = pitch + (36 << 7);
++      frequency = start + ((end - start) * (smoothness + 32768) >> 14);
++    }
++    frequency += 32768;
++    return frequency < 0 ? 0 : frequency;
++  }
++
++  uint32_t phase_;
++  uint16_t x_, y_;
++  int32_t lp_[2];
++  bool first_;
++  bool snap_;
++};
++
++}  // namespace sheep
++
++#endif  // MC_SHEEP_H_
+diff --git a/tools/machines/macro/sheep_glue.cc b/tools/machines/macro/sheep_glue.cc
+new file mode 100644
+index 0000000..d2ee909
+--- /dev/null
++++ b/tools/machines/macro/sheep_glue.cc
+@@ -0,0 +1,52 @@
++/*
++ * SHEEP A, B, C as MACRO models (notes/74, notes/75): the wavetable oscillator of Sheep (Emilie Gillet, MIT, Tides
++ * firmware), one bank per model. Our voice is sheep.h, proved sample for sample against the original code.
++ *
++ * Knobs: COLOR (a) = X in the wave map, SWEEP (b) = Y, CONTOUR (c) = wavefolder amount (0: none), PITCH = the note.
++ * Only compiled with MC_SHEEP: its tables are about 96 KB, which the OS image has no room for yet (notes/75 §2).
++ */
++#ifdef MC_SHEEP
++#include <new>
++
++#include "sheep.h"
++#include "voices.h"
++
++static_assert(sizeof(sheep::Voice) <= EXT_BYTES, "EXT_BYTES too small for the Sheep voice");
++
++struct SheepState {
++	sheep::Voice v;
++	int note, x, y, fold;
++};
++
++static inline SheepState *S(void *st) { return reinterpret_cast<SheepState *>(st); }
++
++extern "C" void ext_init(void *st, int kind)
++{
++	if (kind < 4)
++		return;
++	new (st) SheepState;
++	S(st)->v.Init();
++	S(st)->note = 60 << 7;
++	S(st)->x = S(st)->y = S(st)->fold = 0;
++}
++
++extern "C" void ext_set(void *st, int kind, int note, int a, int b, int c, int decay)
++{
++	(void)decay;
++	if (kind < 4)
++		return;
++	S(st)->note = note;
++	S(st)->x = (a - 16383) * 2;
++	S(st)->y = (b - 16383) * 2;
++	S(st)->fold = c * 32767 / 32766;                 /* 0 .. 32767: fold, no filtering */
++}
++
++extern "C" void ext_render(void *st, int kind, int strike, short *out, int n)
++{
++	if (kind < 4)
++		return;
++	if (strike)
++		S(st)->v.Strike();
++	S(st)->v.Render(S(st)->note, S(st)->x, S(st)->y, S(st)->fold, kind - 4, out, n);
++}
++#endif
+diff --git a/tools/machines/macro/voices.h b/tools/machines/macro/voices.h
+new file mode 100644
+index 0000000..15cc3ea
+--- /dev/null
++++ b/tools/machines/macro/voices.h
+@@ -0,0 +1,30 @@
++/*
++ * Voices of MACRO that are not Braids models (notes/74, notes/75): the drums of Peaks and the wavetable oscillator of
++ * Sheep, all by Emilie Gillet (MIT). Each one lives in its own translation unit (peaks_glue.cc, sheep_glue.cc): the
++ * resource headers of Braids, Peaks and Tides define the same macro names (LUT_SVF_CUTOFF ...) with different values
++ * and cannot be included together.
++ *
++ * The voice state is an opaque block of EXT_BYTES bytes inside the track; the glue checks its own size.
++ * kind: 0 BASS DRUM, 1 SNARE DRUM, 2 HI-HAT, 3 FM DRUM (Peaks) ; 4, 5, 6 SHEEP bank A, B, C.
++ */
++#ifndef MC_VOICES_H_
++#define MC_VOICES_H_
++
++#define EXT_BYTES   256
++#define EXT_PEAKS   4                                /* kinds 0..3 */
++#ifdef MC_SHEEP
++#define EXT_KINDS   7
++#else
++#define EXT_KINDS   4
++#endif
++
++extern "C" {
++/* (re)initialise the voice of this kind */
++void ext_init(void *st, int kind);
++/* note: 1/128 semitone, 440 Hz at 69 ; a, b, c: COLOR (+ envelope), SWEEP, CONTOUR in 0..32766 ; decay: DECAY 0..127 */
++void ext_set(void *st, int kind, int note, int a, int b, int c, int decay);
++/* n samples (16 bit, full scale) ; strike: a trig happens at the first sample */
++void ext_render(void *st, int kind, int strike, short *out, int n);
++}
++
++#endif
+-- 
+2.43.0
+
+
+From f9b09e1be94247d7d1dfd93f87caf8d3b620f33c Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sun, 1 Nov 2026 18:39:06 +0100
+Subject: [PATCH 2/3] notes/75: correct the space estimate (dropping Syntakt
+ engines frees ~7 KB in total)
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01PWz8WXy4iL498UCqpoSf7D
+---
+ notes/75-peaks-et-sheep-dans-macro.md | 12 +++++++++---
+ notes/README.md                       |  2 +-
+ 2 files changed, 10 insertions(+), 4 deletions(-)
+
+diff --git a/notes/75-peaks-et-sheep-dans-macro.md b/notes/75-peaks-et-sheep-dans-macro.md
+index ee131f3..12cf0a1 100644
+--- a/notes/75-peaks-et-sheep-dans-macro.md
++++ b/notes/75-peaks-et-sheep-dans-macro.md
+@@ -60,9 +60,15 @@ valeurs : chaque famille est donc dans **son** fichier `.cc`, derrière `voices.
+    `gen_macro_syntakt.py`, `gen_acid_combos.py` partagent ce plan. Les variables : 6 pistes × (256 + 8) o de plus.
+ 2. `gen_macro.py` : `SOURCES` + `peaks/drums/*.cc`, `peaks/resources.cc` (le lien garde ce qui est utilisé :
+    `--gc-sections`, à vérifier), `peaks_glue.cc` ; `MODELS` / knob « Model » max 50 (puis 53 avec Sheep).
+-3. **Sheep : libérer de la place**, au choix : une seule banque (≈ 25 Ko) en retirant un moteur du Syntakt (SY SWARM, par
+-   exemple : environ le même ordre de taille) ; ou trois banques (≈ 74 Ko) en retirant plusieurs moteurs. Décision de
+-   l'utilisateur : ce n'est pas gratuit.
++3. **Sheep : la place manque, et retirer des machines n'y suffit pas** `[FAIT, mesuré sur REGISTRY.md]` : retirer un
++   moteur du Syntakt libère très peu : SD 215 o, CP 180 o, TOY 199 o, BITS 230 o, **SWARM 6 182 o** (le gros du
++   Syntakt, du Sampler Model-TG, de MACRO et d'ACID est partagé). Les cinq ensemble : ≈ 7 Ko. Il reste 16,5 Ko ; Peaks en
++   prend ≈ 9 ; une banque de Sheep en veut 24 à 27. Pistes, de la moins coûteuse à la plus coûteuse : (a) mieux
++   comprimer les ondes (deltas avant aPLib) et mesurer ; (b) **partager avec Braids** : la banque C de Sheep reprend
++   les ondes du mode WAVE MAP de Braids, déjà dans l'image (formats différents : à vérifier) ; (c) calculer la banque
++   additive (A) au démarrage depuis ses recettes (`tides/resources/wavetables.py`), en virgule fixe, donc pas à
++   l'échantillon près ; (d) libérer de la place ailleurs (retirer SWARM : 6 Ko). L'estimation « un moteur du Syntakt, même
++   ordre de taille qu'une banque » de la première version de cette note était **fausse**.
+ 4. Preuve Unicorn (`tools/emu/test_macro.py`) : un cas par modèle, seul et avec tout l'OS, coût par bloc de 32 trames.
+ 5. Licences : MIT, Émilie Gillet : `THIRD-PARTY-NOTICES.md`, `PROVENANCE.md`, `LICENSE-Braids` (ou un fichier Peaks et un
+    fichier Tides), `os.json` (`credit`, `license`) ; ni le nom du module ni celui de Mutable Instruments sur la machine.
+diff --git a/notes/README.md b/notes/README.md
+index c63da26..ce4e6bf 100644
+--- a/notes/README.md
++++ b/notes/README.md
+@@ -103,7 +103,7 @@ un seul OS, le Modded Cycles OS 2.0 (18/10/2026).
+ | [72-reglages-des-mods.md](72-reglages-des-mods.md) | **Mod Settings : une page de réglages des mods, et l'audio USB en 2CH ou 6CH** (Maxime, 19/10/2026, issue #82) : 9ᵉ ligne « Mods » du Config Menu (`0x4003c134`, épilogue `0x4003c99a`), page `MenuView` « Mod Settings », ligne USB Audio ; enregistrement « MODS » de 16 o en `0x404e9b80`, dans les 272 o de réglages sauvegardés hors CRC ; en 6CH les 15 modifications de `6ch-usbup` faites en mémoire (démarrage par `0x4000576c`, bascule USB arrêtée par `0x40004d9a`/`0x40004db4`, indices des rings à zéro, caches poussés), en 2CH le pilote d'origine ; champ `runtime` vérifié par `check_overlaps.py` ; **testé sur la machine le 19/10/2026** |
+ | [73-step-record.md](73-step-record.md) | **Step record : les notes d'un pattern pas à pas** (Maxime, 20/10/2026) : double appui sur REC à l'arrêt (`TransportView` `0x4002439a`, codes 9/10/11, drapeau de double appui) ; chaque note jouée (message de type 12, gestionnaire `0x40007000`) écrite comme le live rec (`0x40012158`) sur notre pas ; potards par le drapeau « enregistrer » du setter `0x4000ba7a` (mot du son en +20 + 2k), p-locks par `0x4001646a`, son rétabli ; LED posées avant les vues (`0x40006a76`), tick 30 Hz (`0x400081e4`) ; variables en `0x4233e800` ; preuve sur un vrai projet (`0x4000ea3a`, `0x40061738`), mémoire = celle du live rec ; **testé sur la machine le 20/10/2026** |
+ | [74-sheep-dans-macro.md](74-sheep-dans-macro.md) | **Sheep (firmware alternatif de Tides) dans MACRO : étude de portage** (demande d'utilisateur, 01/11/2026) : code entier à 48 kHz (cadence du Cycles, pas de rééchantillonnage), source `tides/generator.cc` `ProcessWavetable` (MIT) ; voix `tools/machines/macro/sheep.h` **identique à l'échantillon près** au Generator d'origine sur 540 cas (`tools/check_sheep_host.sh`) ; intégration proposée : 3 modèles de plus dans MACRO (SHAPE 47–49) plutôt qu'une 7ᵉ machine ; ≈ 96 Ko de tables ; **pas intégré à l'OS** : il faut l'OS 1.13, la preuve Unicorn et l'essai sur la machine |
+-| [75-peaks-et-sheep-dans-macro.md](75-peaks-et-sheep-dans-macro.md) | **Peaks (4 batteries) et Sheep dans MACRO** (demande d'utilisateur, 01/11/2026) : modèles SHAPE 47 à 53 plutôt qu'une 15ᵉ machine (écran MACHINES plein) ; `voices.h`, `peaks_glue.cc`, `sheep_glue.cc`, branche dans `macro.cc` ; preuves sur l'ordinateur identiques aux originaux (540 cas chacune) ; Peaks tient dans les 16,5 Ko libres, **Sheep (74 Ko) non** sans retirer des moteurs ; rien de construit pour le Cycles |
++| [75-peaks-et-sheep-dans-macro.md](75-peaks-et-sheep-dans-macro.md) | **Peaks (4 batteries) et Sheep dans MACRO** (demande d'utilisateur, 01/11/2026) : modèles SHAPE 47 à 53 plutôt qu'une 15ᵉ machine (écran MACHINES plein) ; `voices.h`, `peaks_glue.cc`, `sheep_glue.cc`, branche dans `macro.cc` ; preuves sur l'ordinateur identiques aux originaux (540 cas chacune) ; Peaks tient dans les 16,5 Ko libres, **Sheep (74 Ko) non** : retirer des moteurs ne libère que 7 Ko ; rien de construit pour le Cycles |
+ | [30-regulateur-charge-soutenue.md](30-regulateur-charge-soutenue.md) | **Régulateur : couper sur la charge soutenue** : relevé v8 en 6 canaux (91/71, dernière piste toujours coupée) ; le régulateur réagissait aux moments denses (5 ms) et aux blocs au-dessus de 90 % ; nouvelle règle : moyenne lente (170 ms) à 86 %, pic à 93 % (retour sous 89 %), voix du Syntakt plus comptées pour moitié ; diagnostic v9 |
+ | [29-voix-syntakt-en-sram.md](29-voix-syntakt-en-sram.md) | **Les états des voix du Syntakt en SRAM** : relevés v7 (une voix du Syntakt coûte autant qu'une voix d'origine ; 6 pistes ≈ 88 %, coupures de temps en temps) ; les 6 états de voix (1 800 o) passent en SRAM ; modèle : −3 points de bloc ; diagnostic v8 (pic/moyenne) |
+ | [28-code-syntakt-en-sram.md](28-code-syntakt-en-sram.md) | **Le code du Syntakt en SRAM** : relevés du diagnostic v6 (chaque voix du Syntakt ajoute 9 à 13 points, l'interface reste fluide) ; les 30 tables d'ondes de CHORD passent dans la charge utile, leur place en SRAM reçoit le code du Syntakt et 3 de ses tables ; régulateur à 86 % ; identique en émulation ; modèle : boucle des voix de 63,5 à 52 % avec 5 moteurs différents ; diagnostic v7 |
+-- 
+2.43.0
+
+
+From e2032ca95bfea252506c69ef74e455f03c934d02 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sun, 1 Nov 2026 18:45:24 +0100
+Subject: [PATCH 3/3] notes/75: engines share a ~136 KB base; removing all five
+ frees ~152 KB, Sheep tables need 60-74 KB
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01PWz8WXy4iL498UCqpoSf7D
+---
+ notes/75-peaks-et-sheep-dans-macro.md | 22 +++++++++++++---------
+ notes/README.md                       |  2 +-
+ 2 files changed, 14 insertions(+), 10 deletions(-)
+
+diff --git a/notes/75-peaks-et-sheep-dans-macro.md b/notes/75-peaks-et-sheep-dans-macro.md
+index 12cf0a1..a6c4b03 100644
+--- a/notes/75-peaks-et-sheep-dans-macro.md
++++ b/notes/75-peaks-et-sheep-dans-macro.md
+@@ -60,15 +60,19 @@ valeurs : chaque famille est donc dans **son** fichier `.cc`, derrière `voices.
+    `gen_macro_syntakt.py`, `gen_acid_combos.py` partagent ce plan. Les variables : 6 pistes × (256 + 8) o de plus.
+ 2. `gen_macro.py` : `SOURCES` + `peaks/drums/*.cc`, `peaks/resources.cc` (le lien garde ce qui est utilisé :
+    `--gc-sections`, à vérifier), `peaks_glue.cc` ; `MODELS` / knob « Model » max 50 (puis 53 avec Sheep).
+-3. **Sheep : la place manque, et retirer des machines n'y suffit pas** `[FAIT, mesuré sur REGISTRY.md]` : retirer un
+-   moteur du Syntakt libère très peu : SD 215 o, CP 180 o, TOY 199 o, BITS 230 o, **SWARM 6 182 o** (le gros du
+-   Syntakt, du Sampler Model-TG, de MACRO et d'ACID est partagé). Les cinq ensemble : ≈ 7 Ko. Il reste 16,5 Ko ; Peaks en
+-   prend ≈ 9 ; une banque de Sheep en veut 24 à 27. Pistes, de la moins coûteuse à la plus coûteuse : (a) mieux
+-   comprimer les ondes (deltas avant aPLib) et mesurer ; (b) **partager avec Braids** : la banque C de Sheep reprend
+-   les ondes du mode WAVE MAP de Braids, déjà dans l'image (formats différents : à vérifier) ; (c) calculer la banque
+-   additive (A) au démarrage depuis ses recettes (`tides/resources/wavetables.py`), en virgule fixe, donc pas à
+-   l'échantillon près ; (d) libérer de la place ailleurs (retirer SWARM : 6 Ko). L'estimation « un moteur du Syntakt, même
+-   ordre de taille qu'une banque » de la première version de cette note était **fausse**.
++3. **Sheep : la place manque** `[FAIT, mesuré sur REGISTRY.md et sur les tables]`
++   - Retirer **un** moteur du Syntakt libère peu (SD 215 o, CP 180 o, TOY 199 o, BITS 230 o, SWARM 6 182 o) : le socle
++     des moteurs (≈ 136 Ko compressés) est partagé. Mais **retirer les cinq** le libère : `macro-acid-tg` (Model-TG,
++     MACRO, ACID, sans moteurs) finit en `0x401dacac`, soit ≈ 152 Ko avant `0x40200000`, contre 16,5 Ko aujourd'hui.
++     L'estimation « les cinq ensemble ≈ 7 Ko » de la version précédente de cette note était fausse (somme de marges).
++   - Les ondes de Sheep ne se compressent pas assez : `wt_waves` = 91 Ko ; zlib 74 Ko ; meilleur codage sans perte
++     essayé (prédiction d'ordre 2, entropie) ≈ 60 Ko. Banque A (additive) et B (formants) sont **calculées** par
++     `tides/resources/wavetables.py` (sommes de sinus, formants) : 2 × 64 ondes ; la banque C (« Shruthi ») est lue dans
++     `waves.bin`, 50 ondes × 257 × int16 ≈ 25,7 Ko (zlib ≈ 22 Ko). Calculer A (et B) au démarrage en virgule fixe
++     coûterait quelques Ko de code au lieu de 33 Ko de tables par banque, mais ne serait pas identique à l'échantillon.
++   - Choix possibles : (1) Peaks + Sheep banque A calculée au démarrage, tous les moteurs gardés (tient) ; (2) Peaks +
++     Sheep complet en retirant les cinq moteurs du Syntakt (tient de justesse en compressé : Braids ≈ 60 + Peaks ≈ 9 +
++     Sheep ≈ 74 Ko pour ≈ 152 Ko libres : à mesurer) ; (3) Peaks seul d'abord, Sheep ensuite.
+ 4. Preuve Unicorn (`tools/emu/test_macro.py`) : un cas par modèle, seul et avec tout l'OS, coût par bloc de 32 trames.
+ 5. Licences : MIT, Émilie Gillet : `THIRD-PARTY-NOTICES.md`, `PROVENANCE.md`, `LICENSE-Braids` (ou un fichier Peaks et un
+    fichier Tides), `os.json` (`credit`, `license`) ; ni le nom du module ni celui de Mutable Instruments sur la machine.
+diff --git a/notes/README.md b/notes/README.md
+index ce4e6bf..15a61f6 100644
+--- a/notes/README.md
++++ b/notes/README.md
+@@ -103,7 +103,7 @@ un seul OS, le Modded Cycles OS 2.0 (18/10/2026).
+ | [72-reglages-des-mods.md](72-reglages-des-mods.md) | **Mod Settings : une page de réglages des mods, et l'audio USB en 2CH ou 6CH** (Maxime, 19/10/2026, issue #82) : 9ᵉ ligne « Mods » du Config Menu (`0x4003c134`, épilogue `0x4003c99a`), page `MenuView` « Mod Settings », ligne USB Audio ; enregistrement « MODS » de 16 o en `0x404e9b80`, dans les 272 o de réglages sauvegardés hors CRC ; en 6CH les 15 modifications de `6ch-usbup` faites en mémoire (démarrage par `0x4000576c`, bascule USB arrêtée par `0x40004d9a`/`0x40004db4`, indices des rings à zéro, caches poussés), en 2CH le pilote d'origine ; champ `runtime` vérifié par `check_overlaps.py` ; **testé sur la machine le 19/10/2026** |
+ | [73-step-record.md](73-step-record.md) | **Step record : les notes d'un pattern pas à pas** (Maxime, 20/10/2026) : double appui sur REC à l'arrêt (`TransportView` `0x4002439a`, codes 9/10/11, drapeau de double appui) ; chaque note jouée (message de type 12, gestionnaire `0x40007000`) écrite comme le live rec (`0x40012158`) sur notre pas ; potards par le drapeau « enregistrer » du setter `0x4000ba7a` (mot du son en +20 + 2k), p-locks par `0x4001646a`, son rétabli ; LED posées avant les vues (`0x40006a76`), tick 30 Hz (`0x400081e4`) ; variables en `0x4233e800` ; preuve sur un vrai projet (`0x4000ea3a`, `0x40061738`), mémoire = celle du live rec ; **testé sur la machine le 20/10/2026** |
+ | [74-sheep-dans-macro.md](74-sheep-dans-macro.md) | **Sheep (firmware alternatif de Tides) dans MACRO : étude de portage** (demande d'utilisateur, 01/11/2026) : code entier à 48 kHz (cadence du Cycles, pas de rééchantillonnage), source `tides/generator.cc` `ProcessWavetable` (MIT) ; voix `tools/machines/macro/sheep.h` **identique à l'échantillon près** au Generator d'origine sur 540 cas (`tools/check_sheep_host.sh`) ; intégration proposée : 3 modèles de plus dans MACRO (SHAPE 47–49) plutôt qu'une 7ᵉ machine ; ≈ 96 Ko de tables ; **pas intégré à l'OS** : il faut l'OS 1.13, la preuve Unicorn et l'essai sur la machine |
+-| [75-peaks-et-sheep-dans-macro.md](75-peaks-et-sheep-dans-macro.md) | **Peaks (4 batteries) et Sheep dans MACRO** (demande d'utilisateur, 01/11/2026) : modèles SHAPE 47 à 53 plutôt qu'une 15ᵉ machine (écran MACHINES plein) ; `voices.h`, `peaks_glue.cc`, `sheep_glue.cc`, branche dans `macro.cc` ; preuves sur l'ordinateur identiques aux originaux (540 cas chacune) ; Peaks tient dans les 16,5 Ko libres, **Sheep (74 Ko) non** : retirer des moteurs ne libère que 7 Ko ; rien de construit pour le Cycles |
++| [75-peaks-et-sheep-dans-macro.md](75-peaks-et-sheep-dans-macro.md) | **Peaks (4 batteries) et Sheep dans MACRO** (demande d'utilisateur, 01/11/2026) : modèles SHAPE 47 à 53 plutôt qu'une 15ᵉ machine (écran MACHINES plein) ; `voices.h`, `peaks_glue.cc`, `sheep_glue.cc`, branche dans `macro.cc` ; preuves sur l'ordinateur identiques aux originaux (540 cas chacune) ; Peaks tient dans les 16,5 Ko libres, **Sheep (74 Ko) non** : retirer un moteur libère ≤ 6 Ko, les cinq ≈ 136 Ko ; rien de construit pour le Cycles |
+ | [30-regulateur-charge-soutenue.md](30-regulateur-charge-soutenue.md) | **Régulateur : couper sur la charge soutenue** : relevé v8 en 6 canaux (91/71, dernière piste toujours coupée) ; le régulateur réagissait aux moments denses (5 ms) et aux blocs au-dessus de 90 % ; nouvelle règle : moyenne lente (170 ms) à 86 %, pic à 93 % (retour sous 89 %), voix du Syntakt plus comptées pour moitié ; diagnostic v9 |
+ | [29-voix-syntakt-en-sram.md](29-voix-syntakt-en-sram.md) | **Les états des voix du Syntakt en SRAM** : relevés v7 (une voix du Syntakt coûte autant qu'une voix d'origine ; 6 pistes ≈ 88 %, coupures de temps en temps) ; les 6 états de voix (1 800 o) passent en SRAM ; modèle : −3 points de bloc ; diagnostic v8 (pic/moyenne) |
+ | [28-code-syntakt-en-sram.md](28-code-syntakt-en-sram.md) | **Le code du Syntakt en SRAM** : relevés du diagnostic v6 (chaque voix du Syntakt ajoute 9 à 13 points, l'interface reste fluide) ; les 30 tables d'ondes de CHORD passent dans la charge utile, leur place en SRAM reçoit le code du Syntakt et 3 de ses tables ; régulateur à 86 % ; identique en émulation ; modèle : boucle des voix de 63,5 à 52 % avec 5 moteurs différents ; diagnostic v7 |
+-- 
+2.43.0
+

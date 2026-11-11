@@ -41,6 +41,9 @@
 #include <new>
 
 #include "braids/macro_oscillator.h"
+#ifdef MC_EXT
+#include "voices.h"                               /* Peaks drums, Sheep (notes/75): models after the 47 of Braids */
+#endif
 
 typedef signed char s8;
 typedef short s16;
@@ -60,7 +63,12 @@ typedef unsigned int u32;
 #define V32(o)      (*(s32 *)(v + (o)))
 #define P16(o)      (*(const s16 *)(p + (o)))
 
-#define MODELS      47                               /* CSAW .. DIGITAL_MODULATION (sans QUESTION_MARK) */
+#define BRAIDS_MODELS 47                             /* CSAW .. DIGITAL_MODULATION (sans QUESTION_MARK) */
+#ifdef MC_EXT                                        /* notes/75 : puis BASS DRUM, SNARE DRUM, HI-HAT, FM DRUM (Peaks), SHEEP A, B, C */
+#define MODELS      (BRAIDS_MODELS + EXT_KINDS)
+#else
+#define MODELS      BRAIDS_MODELS
+#endif
 #define HIST        22                               /* echantillons du bloc precedent pour le filtre */
 #define IDLE_LEVEL  (1 << 14)                        /* enveloppe d'ampli sous -102 dB : voix muette */
 #define ONE         (1 << 24)                        /* RATE : un echantillon (Q24) */
@@ -83,6 +91,11 @@ struct Track {
 	u32 ph;                                          /* 48 kHz ou moins : phase du rendu (Q24) */
 	u32 hph;                                         /* echantillonneur-bloqueur : sa phase (Q24) */
 	s32 cur;                                         /* RATE : echantillon tenu */
+#ifdef MC_EXT
+	s32 ext;                                         /* modele hors Braids en cours (0..EXT_KINDS-1), -1 : un modele de Braids */
+	s32 strike;                                      /* modele hors Braids : un trig au prochain rendu */
+	alignas(4) unsigned char xs[EXT_BYTES];          /* son etat (voices.h) */
+#endif
 };
 
 /* pas de constructeurs globaux (rien ne les appellerait) : placement new a l'initialisation de la piste */
@@ -95,7 +108,7 @@ static const s16 HB[6] = { 10327, -3131, 1579, -820, 434, -197 };
 
 /* modeles alleges, rendus a 48 kHz (notes/55) : ce que le modele ajoute au-dessus de sa note (1/128 de demi-ton :
  * desaccord des TRIPLE jusqu'a 24 demi-tons, accords de WAVE PARAPHONIC jusqu'a 19 demi-tons + 5) ; -1 : 96 kHz */
-static const s16 LITE[MODELS] = {
+static const s16 LITE[BRAIDS_MODELS] = {
 	0, -1, 0, -1, -1, 0, 0, -1, -1,                  /* CSAW, SAW_SQUARE, SQUARE_SUB, SAW_SUB */
 	3072, 3072, 3072, 3072,                          /* TRIPLE_SAW, _SQUARE, _TRIANGLE, _SINE */
 	-1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
@@ -147,6 +160,10 @@ extern "C" void macro_update(s32 pmod, char *v, const char *p)
 		tr->mode = -1;
 		tr->ph = tr->hph = ONE - 1;              /* le 1er echantillon sort tout de suite */
 		tr->cur = 0;
+#ifdef MC_EXT
+		tr->ext = -1;
+		tr->strike = 0;
+#endif
 		V32(MARK_OFF) = MARK;
 	}
 	/* chaine d'ampli d'origine, reglee comme TONE (0x400aa7b8) */
@@ -170,6 +187,28 @@ extern "C" void macro_update(s32 pmod, char *v, const char *p)
 
 	shape = P16(0x18) >> 8;
 	shape = shape < 0 ? 0 : (shape >= MODELS ? MODELS - 1 : shape);
+#ifdef MC_EXT
+	if (shape >= BRAIDS_MODELS) {                    /* Peaks, Sheep (notes/75) : un rendu de 32 trames a 48 kHz, sans RATE ni BITS */
+		s32 kind = shape - BRAIDS_MODELS;
+		if (tr->ext != kind) {                   /* nouveau modele : etat remis a zero */
+			ext_init(tr->xs, kind);
+			tr->ext = kind;
+			tr->strike = 0;
+		}
+		n = ((s32)P16(0x14) << 8) - (64 << 16) + pmod;
+		n = n < 0 ? 0 : (n > (127 << 16) ? 127 << 16 : n);
+		n >>= 9;                                 /* 1/128 de demi-ton, 440 Hz a 69, comme Braids */
+		env = V32(0x38) ? 32767 : (s32)(mag(V32(0x230)) >> 16);
+		env = env > 32767 ? 32767 : env;
+		timbre = knob(P16(0x16)) + ((env * knob(P16(0x1c))) >> 15);
+		timbre = timbre > 32767 ? 32767 : timbre;
+		ext_set(tr->xs, kind, n, timbre, knob(P16(0x1a)), knob(P16(0x1c)), dec);
+		if (V32(0x38))
+			tr->strike = 1;
+		return;
+	}
+	tr->ext = -1;
+#endif
 	tr->osc.set_shape(static_cast<braids::MacroOscillatorShape>(shape));
 
 	/* FINE (FUNC + PITCH) : RATE en dessous de 64, BITS au-dessus */
@@ -227,6 +266,20 @@ extern "C" void macro_render(s32 *out, char *v)
 			out[i] = 0;
 		return;
 	}
+#ifdef MC_EXT
+	if (tr->ext >= 0) {                              /* Peaks, Sheep : 32 trames a 48 kHz (voices.h), pleine echelle -> 1/2 (Q31) */
+		s16 b[32];
+		ext_render(tr->xs, tr->ext, tr->strike, b, 32);
+		tr->strike = 0;
+		for (i = 0; i < 32; i++)
+			out[i] = (s32)b[i] << 15;
+		tr->mode = -1;                           /* au retour a un modele de Braids : rendu repris de zero */
+		AMP_ENV(v);
+		VCA(out, v);
+		PUNCH(out, v);
+		return;
+	}
+#endif
 	if (tr->want != tr->mode) {                      /* changement de rendu : on repart de zero */
 		for (i = 0; i < HIST; i++)
 			tr->x[i] = 0;

@@ -83,7 +83,7 @@ BRANCH = re.compile(r"b(ra|sr|cc|cs|eq|ne|ge|gt|le|lt|hi|ls|mi|pl|vc|vs)[swl]?$"
 
 
 def run(cmd, **kw):
-    return subprocess.run(cmd, check=True, capture_output=True, text=True, **kw).stdout
+    r = subprocess.run(cmd, capture_output=True, text=True, **kw); r.returncode and print(r.stderr[-4000:]); r.check_returncode(); return r.stdout
 
 
 def disasm(img, tmp):

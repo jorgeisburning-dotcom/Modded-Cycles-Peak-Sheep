@@ -1,0 +1,15 @@
+diff --git a/tools/gen_macro.py b/tools/gen_macro.py
+index 05447d6..7924bb0 100644
+--- a/tools/gen_macro.py
++++ b/tools/gen_macro.py
+@@ -111,7 +111,9 @@ LINK = """SECTIONS
+ }}
+ """
+ # .sheep comes first: the linker gives an input section to the first rule that matches it, and .rodata then follows .text
+-LINK_EXT = LINK.replace("  .text {code:#x}", "  .sheep {sheep:#x} : {{ *(" + SHEEP_SECTION + ") }}\n  .text {code:#x}")
++# stmlib tags some functions IN_RAM (section .ramtext, "run from RAM" on the STM32): here all runs from RAM, they go in .text
++LINK_EXT = LINK.replace("  .text {code:#x}", "  .sheep {sheep:#x} : {{ *(" + SHEEP_SECTION + ") }}\n  .text {code:#x}").replace(
++    "*(.text*) }}", "*(.text*) *(.ramtext*) }}")
+ TG_FIRST = gs.TG_FIRST
+ BRAIDS_RENDER = "_ZN6braids15MacroOscillator6RenderEPKhPsj"      # MacroOscillator::Render(sync, buffer, size)
+ 

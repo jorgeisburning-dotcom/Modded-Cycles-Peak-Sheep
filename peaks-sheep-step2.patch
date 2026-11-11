@@ -1,0 +1,507 @@
+From e2032ca95bfea252506c69ef74e455f03c934d02 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sun, 1 Nov 2026 18:45:24 +0100
+Subject: [PATCH 1/2] notes/75: engines share a ~136 KB base; removing all five
+ frees ~152 KB, Sheep tables need 60-74 KB
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01PWz8WXy4iL498UCqpoSf7D
+---
+ notes/75-peaks-et-sheep-dans-macro.md | 22 +++++++++++++---------
+ notes/README.md                       |  2 +-
+ 2 files changed, 14 insertions(+), 10 deletions(-)
+
+diff --git a/notes/75-peaks-et-sheep-dans-macro.md b/notes/75-peaks-et-sheep-dans-macro.md
+index 12cf0a1..a6c4b03 100644
+--- a/notes/75-peaks-et-sheep-dans-macro.md
++++ b/notes/75-peaks-et-sheep-dans-macro.md
+@@ -60,15 +60,19 @@ valeurs : chaque famille est donc dans **son** fichier `.cc`, derrière `voices.
+    `gen_macro_syntakt.py`, `gen_acid_combos.py` partagent ce plan. Les variables : 6 pistes × (256 + 8) o de plus.
+ 2. `gen_macro.py` : `SOURCES` + `peaks/drums/*.cc`, `peaks/resources.cc` (le lien garde ce qui est utilisé :
+    `--gc-sections`, à vérifier), `peaks_glue.cc` ; `MODELS` / knob « Model » max 50 (puis 53 avec Sheep).
+-3. **Sheep : la place manque, et retirer des machines n'y suffit pas** `[FAIT, mesuré sur REGISTRY.md]` : retirer un
+-   moteur du Syntakt libère très peu : SD 215 o, CP 180 o, TOY 199 o, BITS 230 o, **SWARM 6 182 o** (le gros du
+-   Syntakt, du Sampler Model-TG, de MACRO et d'ACID est partagé). Les cinq ensemble : ≈ 7 Ko. Il reste 16,5 Ko ; Peaks en
+-   prend ≈ 9 ; une banque de Sheep en veut 24 à 27. Pistes, de la moins coûteuse à la plus coûteuse : (a) mieux
+-   comprimer les ondes (deltas avant aPLib) et mesurer ; (b) **partager avec Braids** : la banque C de Sheep reprend
+-   les ondes du mode WAVE MAP de Braids, déjà dans l'image (formats différents : à vérifier) ; (c) calculer la banque
+-   additive (A) au démarrage depuis ses recettes (`tides/resources/wavetables.py`), en virgule fixe, donc pas à
+-   l'échantillon près ; (d) libérer de la place ailleurs (retirer SWARM : 6 Ko). L'estimation « un moteur du Syntakt, même
+-   ordre de taille qu'une banque » de la première version de cette note était **fausse**.
++3. **Sheep : la place manque** `[FAIT, mesuré sur REGISTRY.md et sur les tables]`
++   - Retirer **un** moteur du Syntakt libère peu (SD 215 o, CP 180 o, TOY 199 o, BITS 230 o, SWARM 6 182 o) : le socle
++     des moteurs (≈ 136 Ko compressés) est partagé. Mais **retirer les cinq** le libère : `macro-acid-tg` (Model-TG,
++     MACRO, ACID, sans moteurs) finit en `0x401dacac`, soit ≈ 152 Ko avant `0x40200000`, contre 16,5 Ko aujourd'hui.
++     L'estimation « les cinq ensemble ≈ 7 Ko » de la version précédente de cette note était fausse (somme de marges).
++   - Les ondes de Sheep ne se compressent pas assez : `wt_waves` = 91 Ko ; zlib 74 Ko ; meilleur codage sans perte
++     essayé (prédiction d'ordre 2, entropie) ≈ 60 Ko. Banque A (additive) et B (formants) sont **calculées** par
++     `tides/resources/wavetables.py` (sommes de sinus, formants) : 2 × 64 ondes ; la banque C (« Shruthi ») est lue dans
++     `waves.bin`, 50 ondes × 257 × int16 ≈ 25,7 Ko (zlib ≈ 22 Ko). Calculer A (et B) au démarrage en virgule fixe
++     coûterait quelques Ko de code au lieu de 33 Ko de tables par banque, mais ne serait pas identique à l'échantillon.
++   - Choix possibles : (1) Peaks + Sheep banque A calculée au démarrage, tous les moteurs gardés (tient) ; (2) Peaks +
++     Sheep complet en retirant les cinq moteurs du Syntakt (tient de justesse en compressé : Braids ≈ 60 + Peaks ≈ 9 +
++     Sheep ≈ 74 Ko pour ≈ 152 Ko libres : à mesurer) ; (3) Peaks seul d'abord, Sheep ensuite.
+ 4. Preuve Unicorn (`tools/emu/test_macro.py`) : un cas par modèle, seul et avec tout l'OS, coût par bloc de 32 trames.
+ 5. Licences : MIT, Émilie Gillet : `THIRD-PARTY-NOTICES.md`, `PROVENANCE.md`, `LICENSE-Braids` (ou un fichier Peaks et un
+    fichier Tides), `os.json` (`credit`, `license`) ; ni le nom du module ni celui de Mutable Instruments sur la machine.
+diff --git a/notes/README.md b/notes/README.md
+index ce4e6bf..15a61f6 100644
+--- a/notes/README.md
++++ b/notes/README.md
+@@ -103,7 +103,7 @@ un seul OS, le Modded Cycles OS 2.0 (18/10/2026).
+ | [72-reglages-des-mods.md](72-reglages-des-mods.md) | **Mod Settings : une page de réglages des mods, et l'audio USB en 2CH ou 6CH** (Maxime, 19/10/2026, issue #82) : 9ᵉ ligne « Mods » du Config Menu (`0x4003c134`, épilogue `0x4003c99a`), page `MenuView` « Mod Settings », ligne USB Audio ; enregistrement « MODS » de 16 o en `0x404e9b80`, dans les 272 o de réglages sauvegardés hors CRC ; en 6CH les 15 modifications de `6ch-usbup` faites en mémoire (démarrage par `0x4000576c`, bascule USB arrêtée par `0x40004d9a`/`0x40004db4`, indices des rings à zéro, caches poussés), en 2CH le pilote d'origine ; champ `runtime` vérifié par `check_overlaps.py` ; **testé sur la machine le 19/10/2026** |
+ | [73-step-record.md](73-step-record.md) | **Step record : les notes d'un pattern pas à pas** (Maxime, 20/10/2026) : double appui sur REC à l'arrêt (`TransportView` `0x4002439a`, codes 9/10/11, drapeau de double appui) ; chaque note jouée (message de type 12, gestionnaire `0x40007000`) écrite comme le live rec (`0x40012158`) sur notre pas ; potards par le drapeau « enregistrer » du setter `0x4000ba7a` (mot du son en +20 + 2k), p-locks par `0x4001646a`, son rétabli ; LED posées avant les vues (`0x40006a76`), tick 30 Hz (`0x400081e4`) ; variables en `0x4233e800` ; preuve sur un vrai projet (`0x4000ea3a`, `0x40061738`), mémoire = celle du live rec ; **testé sur la machine le 20/10/2026** |
+ | [74-sheep-dans-macro.md](74-sheep-dans-macro.md) | **Sheep (firmware alternatif de Tides) dans MACRO : étude de portage** (demande d'utilisateur, 01/11/2026) : code entier à 48 kHz (cadence du Cycles, pas de rééchantillonnage), source `tides/generator.cc` `ProcessWavetable` (MIT) ; voix `tools/machines/macro/sheep.h` **identique à l'échantillon près** au Generator d'origine sur 540 cas (`tools/check_sheep_host.sh`) ; intégration proposée : 3 modèles de plus dans MACRO (SHAPE 47–49) plutôt qu'une 7ᵉ machine ; ≈ 96 Ko de tables ; **pas intégré à l'OS** : il faut l'OS 1.13, la preuve Unicorn et l'essai sur la machine |
+-| [75-peaks-et-sheep-dans-macro.md](75-peaks-et-sheep-dans-macro.md) | **Peaks (4 batteries) et Sheep dans MACRO** (demande d'utilisateur, 01/11/2026) : modèles SHAPE 47 à 53 plutôt qu'une 15ᵉ machine (écran MACHINES plein) ; `voices.h`, `peaks_glue.cc`, `sheep_glue.cc`, branche dans `macro.cc` ; preuves sur l'ordinateur identiques aux originaux (540 cas chacune) ; Peaks tient dans les 16,5 Ko libres, **Sheep (74 Ko) non** : retirer des moteurs ne libère que 7 Ko ; rien de construit pour le Cycles |
++| [75-peaks-et-sheep-dans-macro.md](75-peaks-et-sheep-dans-macro.md) | **Peaks (4 batteries) et Sheep dans MACRO** (demande d'utilisateur, 01/11/2026) : modèles SHAPE 47 à 53 plutôt qu'une 15ᵉ machine (écran MACHINES plein) ; `voices.h`, `peaks_glue.cc`, `sheep_glue.cc`, branche dans `macro.cc` ; preuves sur l'ordinateur identiques aux originaux (540 cas chacune) ; Peaks tient dans les 16,5 Ko libres, **Sheep (74 Ko) non** : retirer un moteur libère ≤ 6 Ko, les cinq ≈ 136 Ko ; rien de construit pour le Cycles |
+ | [30-regulateur-charge-soutenue.md](30-regulateur-charge-soutenue.md) | **Régulateur : couper sur la charge soutenue** : relevé v8 en 6 canaux (91/71, dernière piste toujours coupée) ; le régulateur réagissait aux moments denses (5 ms) et aux blocs au-dessus de 90 % ; nouvelle règle : moyenne lente (170 ms) à 86 %, pic à 93 % (retour sous 89 %), voix du Syntakt plus comptées pour moitié ; diagnostic v9 |
+ | [29-voix-syntakt-en-sram.md](29-voix-syntakt-en-sram.md) | **Les états des voix du Syntakt en SRAM** : relevés v7 (une voix du Syntakt coûte autant qu'une voix d'origine ; 6 pistes ≈ 88 %, coupures de temps en temps) ; les 6 états de voix (1 800 o) passent en SRAM ; modèle : −3 points de bloc ; diagnostic v8 (pic/moyenne) |
+ | [28-code-syntakt-en-sram.md](28-code-syntakt-en-sram.md) | **Le code du Syntakt en SRAM** : relevés du diagnostic v6 (chaque voix du Syntakt ajoute 9 à 13 points, l'interface reste fluide) ; les 30 tables d'ondes de CHORD passent dans la charge utile, leur place en SRAM reçoit le code du Syntakt et 3 de ses tables ; régulateur à 86 % ; identique en émulation ; modèle : boucle des voix de 63,5 à 52 % avec 5 moteurs différents ; diagnostic v7 |
+-- 
+2.43.0
+
+
+From 99f73352d78c8dcc20c5177d0b00ee167fa3d369 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 5 Nov 2026 22:06:04 +0100
+Subject: [PATCH 2/2] macro-acid-ext-tg: generator, Sheep wavetable linked
+ apart, one-command build script (not yet built for the Cycles)
+
+Model-TG + MACRO + ACID without the five Syntakt engines, MACRO extended with Peaks and Sheep (SHAPE 47..53).
+Existing MACRO tweaks keep their bytes: macro.cc changes are under MC_EXT, gen_macro.EXT defaults to False.
+Notes 75 corrected: dropping all five engines frees ~152 KB; dropping one frees almost nothing.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01PWz8WXy4iL498UCqpoSf7D
+---
+ THIRD-PARTY-NOTICES.md                   |  2 +-
+ notes/75-peaks-et-sheep-dans-macro.md    | 49 +++++++-----
+ tools/gen_macro.py                       | 41 ++++++++--
+ tools/gen_macro_ext.py                   | 97 ++++++++++++++++++++++++
+ tools/machines/macro/macro.cc            | 16 +++-
+ tools/setup_ext_build.sh                 | 46 +++++++++++
+ tweaks/model-cycles_OS1.13/PROVENANCE.md |  1 +
+ 7 files changed, 225 insertions(+), 27 deletions(-)
+ create mode 100644 tools/gen_macro_ext.py
+ create mode 100755 tools/setup_ext_build.sh
+
+diff --git a/THIRD-PARTY-NOTICES.md b/THIRD-PARTY-NOTICES.md
+index 2462a45..deef124 100644
+--- a/THIRD-PARTY-NOTICES.md
++++ b/THIRD-PARTY-NOTICES.md
+@@ -38,7 +38,7 @@ question.
+ | [elektron-firmware-tool](https://github.com/mischa85/elektron-firmware-tool) | the basis of mtlib's container, codec and signature code (drumkilla's README), and so of the `stub.S` depacker; the codec sketch in `notes/07` §3 | Marcel Bierling | MIT | [`tools/mtlib/LICENSE-elektron-firmware-tool`](tools/mtlib/LICENSE-elektron-firmware-tool) |
+ | [ms-multi-output](https://github.com/scottmetoyer/ms-multi-output) | `10-6ch-multiout.json`; its stubs reused in `11-6ch-usbup.json` (`tools/relocate_6ch.py`), and through it in `12-mod-settings.json` (the 6CH setting of the OS), and listed in `notes/07` §1; `tools/flash.py`, adapted from its `flash.py` | Scott Metoyer | MIT | [`tweaks/model-cycles_OS1.13/LICENSE-ms-multi-output`](tweaks/model-cycles_OS1.13/LICENSE-ms-multi-output) |
+ | [Model-TG](https://github.com/TinyGregAudio/Model-TG) | `30-model-tg.json` and `30-model-tg-st.json`, built by its own build; the excerpts in `tools/gen_model_tg.py`; the `31-syntakt-tg-*.json` files build on it; in `33-sample-preview*.json`, the copy of the track's sound and the "SMP" + 8 hex digits name in `pv_parse` (`tools/machines/sample_preview/sample_preview.S`) are transcribed from its `pool_store_hook` | TinyGregAudio | MIT | [`tweaks/model-cycles_OS1.13/LICENSE-Model-TG`](tweaks/model-cycles_OS1.13/LICENSE-Model-TG) |
+-| [eurorack](https://github.com/pichenettes/eurorack) (Braids) and its [stmlib](https://github.com/pichenettes/stmlib) submodule | the MACRO machine: `braids/macro_oscillator`, `analog_oscillator`, `digital_oscillator`, `resources` and `stmlib/utils/random` at commits `08460a6` and `e3bd7c9`, with the headers they include, compiled unchanged into `25-macro.json`, `32-macro-tg.json` and the `*-macro.json` Syntakt files (`tools/gen_macro.py`, `tools/gen_macro_syntakt.py`). The sources are fetched into `vendor/` at build time, not stored here | Émilie Gillet | MIT | [`tweaks/model-cycles_OS1.13/LICENSE-Braids`](tweaks/model-cycles_OS1.13/LICENSE-Braids) |
++| [eurorack](https://github.com/pichenettes/eurorack) (Braids, Peaks, Tides) and its [stmlib](https://github.com/pichenettes/stmlib) submodule | the MACRO machine: `braids/macro_oscillator`, `analog_oscillator`, `digital_oscillator`, `resources` and `stmlib/utils/random` at commits `08460a6` and `e3bd7c9`, with the headers they include, compiled unchanged into `25-macro.json`, `32-macro-tg.json` and the `*-macro.json` Syntakt files (`tools/gen_macro.py`, `tools/gen_macro_syntakt.py`). `32-macro-acid-ext-tg.json` (notes/75, experimental) adds `peaks/drums/*` (four drums), `peaks/resources` and `tides/resources` (Sheep's wavetables) at the same commits. The sources are fetched into `vendor/` at build time, not stored here | Émilie Gillet | MIT | [`tweaks/model-cycles_OS1.13/LICENSE-Braids`](tweaks/model-cycles_OS1.13/LICENSE-Braids) |
+ | [Open303](https://github.com/RobinSchmidt/Open303) | the ACID machine's sound model: the structure of its TB_303 filter, filter envelope and slide, and their measured constants (commit `313bf0d`), rewritten by this project in fixed point in `tools/machines/acid/` (tables computed by `tools/gen_acid.py`) and compiled into `26-acid.json` and `35-acid-tg.json`; no line of its C++ is copied as is | Robin Schmidt | MIT | [`tweaks/model-cycles_OS1.13/LICENSE-Open303`](tweaks/model-cycles_OS1.13/LICENSE-Open303) |
+ | [Elektroid](https://github.com/dagargo/elektroid) | `tools/webxfer_check.py`, a Python transcription of `src/connectors/elektron.c` that checks the web flasher's fast USB sending. The flasher itself implements the protocol as Elektroid documents it | David García Goñi | GPL-3.0-or-later | [`LICENSES/GPL-3.0-or-later.txt`](LICENSES/GPL-3.0-or-later.txt) |
+ 
+diff --git a/notes/75-peaks-et-sheep-dans-macro.md b/notes/75-peaks-et-sheep-dans-macro.md
+index a6c4b03..50cbb77 100644
+--- a/notes/75-peaks-et-sheep-dans-macro.md
++++ b/notes/75-peaks-et-sheep-dans-macro.md
+@@ -15,11 +15,13 @@ modèles de MACRO ? État : **voix et passerelle prêtes et prouvées sur l'ordi
+   `peaks/drums/*.cc` est entier. Aucun rééchantillonnage.
+ - **Charge** `[HYP, mesure sur PC, pas sur le Cycles]` : bass drum et FM drum ≈ 0,6 × une voix TONE, snare ≈ 1,2, hi-hat
+   ≈ 1,6 ; Sheep ≈ 2,1 (WAVE MAP de Braids : 3,5).
+-- **Place : Peaks tient, Sheep non** `[HYP]` : l'image de l'OS finit à `0x401fbf51`, soit **16 559 o** avant la limite du
+-  bootstrap (`0x40200000`, [52](52-registre-place-libre.md)). Peaks (code + tables utilisées) ≈ 11 Ko décompressé en
+-  x86 `-Os` (3,7 Ko de code, 7,2 Ko de tables), ≈ 9 Ko compressé (zlib, proxy d'aPLib) : **tient, de justesse** ; à
+-  mesurer avec `m68k-elf-gcc`. Les tables de Sheep (`wt_waves`, 178 ondes) font 91 Ko, 74 Ko compressées (une banque :
+-  24 à 27 Ko) : **ne tient pas** sans libérer de la place (§3).
++- **Place** `[FAIT, mesuré sur REGISTRY.md]` : avec les cinq moteurs du Syntakt, il reste 16 559 o sous la limite du
++  bootstrap (`0x40200000`, [52](52-registre-place-libre.md)) : Peaks (≈ 9 Ko compressé) y tient, Sheep (74 Ko, 24 à 27 Ko
++  par banque) non, et retirer **un** moteur ne libère presque rien (SD 215 o, CP 180 o, TOY 199 o, BITS 230 o, SWARM
++  6 182 o : le gros du Syntakt est partagé). **Les retirer tous les cinq** libère le socle du Syntakt : Model-TG +
++  MACRO + ACID (`macro-acid-tg`) finit à `0x401dae9c`, soit **151 908 o libres** : Peaks et les trois banques de Sheep
++  (≈ 83 Ko) tiennent. (Une version précédente de cette note disait « tous les moteurs ensemble ≈ 7 Ko » : c'était
++  faux, les 215 o par moteur sont des marges avec les autres moteurs présents.)
+ 
+ ## 1. Ce qui est prêt (`[FAIT]` sur l'ordinateur)
+ 
+@@ -60,20 +62,31 @@ valeurs : chaque famille est donc dans **son** fichier `.cc`, derrière `voices.
+    `gen_macro_syntakt.py`, `gen_acid_combos.py` partagent ce plan. Les variables : 6 pistes × (256 + 8) o de plus.
+ 2. `gen_macro.py` : `SOURCES` + `peaks/drums/*.cc`, `peaks/resources.cc` (le lien garde ce qui est utilisé :
+    `--gc-sections`, à vérifier), `peaks_glue.cc` ; `MODELS` / knob « Model » max 50 (puis 53 avec Sheep).
+-3. **Sheep : la place manque** `[FAIT, mesuré sur REGISTRY.md et sur les tables]`
+-   - Retirer **un** moteur du Syntakt libère peu (SD 215 o, CP 180 o, TOY 199 o, BITS 230 o, SWARM 6 182 o) : le socle
+-     des moteurs (≈ 136 Ko compressés) est partagé. Mais **retirer les cinq** le libère : `macro-acid-tg` (Model-TG,
+-     MACRO, ACID, sans moteurs) finit en `0x401dacac`, soit ≈ 152 Ko avant `0x40200000`, contre 16,5 Ko aujourd'hui.
+-     L'estimation « les cinq ensemble ≈ 7 Ko » de la version précédente de cette note était fausse (somme de marges).
+-   - Les ondes de Sheep ne se compressent pas assez : `wt_waves` = 91 Ko ; zlib 74 Ko ; meilleur codage sans perte
+-     essayé (prédiction d'ordre 2, entropie) ≈ 60 Ko. Banque A (additive) et B (formants) sont **calculées** par
+-     `tides/resources/wavetables.py` (sommes de sinus, formants) : 2 × 64 ondes ; la banque C (« Shruthi ») est lue dans
+-     `waves.bin`, 50 ondes × 257 × int16 ≈ 25,7 Ko (zlib ≈ 22 Ko). Calculer A (et B) au démarrage en virgule fixe
+-     coûterait quelques Ko de code au lieu de 33 Ko de tables par banque, mais ne serait pas identique à l'échantillon.
+-   - Choix possibles : (1) Peaks + Sheep banque A calculée au démarrage, tous les moteurs gardés (tient) ; (2) Peaks +
+-     Sheep complet en retirant les cinq moteurs du Syntakt (tient de justesse en compressé : Braids ≈ 60 + Peaks ≈ 9 +
+-     Sheep ≈ 74 Ko pour ≈ 152 Ko libres : à mesurer) ; (3) Peaks seul d'abord, Sheep ensuite.
++3. **Sheep et les moteurs** `[FAIT]` : le tweak `macro-acid-ext-tg` (`tools/gen_macro_ext.py`) est Model-TG + MACRO +
++   ACID **sans** les cinq moteurs ; il remplace `syntakt-tg-sd-cp-toy-bits-swarm-macro-acid` de `os.json` pour le
++   firmware d'essai. Les tweaks existants ne changent pas d'un octet (`gen_macro.EXT = False`, `macro.cc` sous
++   `#ifdef MC_EXT`, sortie du préprocesseur identique). Le code de MACRO a une fenêtre de 208 896 o (`gs.STUBS`) dont
++   Braids prend 99 408 : Peaks et Sheep y étaient trop justes ; la table `tides::wt_waves` (91 Ko) est donc liée à part, à
++   `+0x7a000` (au-dessus d'ACID), et rangée comme un morceau de plus (`gen_macro.SHEEP_OFF`, `EXT_BLOB`). Test du plan
++   de liaison sur l'ordinateur : OK (la section part à son adresse, `.rodata` suit `.text`).
+ 4. Preuve Unicorn (`tools/emu/test_macro.py`) : un cas par modèle, seul et avec tout l'OS, coût par bloc de 32 trames.
+ 5. Licences : MIT, Émilie Gillet : `THIRD-PARTY-NOTICES.md`, `PROVENANCE.md`, `LICENSE-Braids` (ou un fichier Peaks et un
+    fichier Tides), `os.json` (`credit`, `license`) ; ni le nom du module ni celui de Mutable Instruments sur la machine.
+ 6. Statut `experimental` jusqu'à l'essai sur la machine ; rien de « testé » avant.
++
++## 5. Construire le firmware d'essai `[FAIT : script écrit ; NON exécuté : pas de `m68k-linux-gnu-g++` dans l'environnement où il a été écrit]`
++
++Les JSON versionnés de MACRO viennent de `m68k-linux-gnu-g++` 13.3 (Ubuntu 24.04, `gen_macro.py`), donc `apt` suffit : pas
++besoin de `m68k-elf-gcc`. Dans un shell Ubuntu 24.04 (un Codespace convient), avec tes deux fichiers officiels dans
++`firmware/` (ignoré par git, jamais commité) :
++
++```sh
++tools/setup_ext_build.sh
++```
++
++Le script installe la chaîne, récupère `vendor/eurorack` au commit épinglé, relance les deux preuves sur l'ordinateur
++contre le code d'origine, reconstruit l'OS stock (le hash du MAIN OS doit rester `82a79f45…cca9`), génère le tweak,
++puis construit `build/Peaks-Sheep-Model-Cycles-Test.syx` (les tweaks de `os.json`, sans les moteurs, plus
++`macro-acid-ext-tg`) ; tout est dans `build/ext/*.log`. **Non fait** : la preuve Unicorn (`tools/emu/test_macro.py`
++n'a pas de cas pour SHAPE ≥ 47), `check_overlaps.py`, `registry.py`, le passage dans `os.json` et le flasher. Le
++firmware d'essai est `experimental` : aucun essai sur la machine à ce jour.
+diff --git a/tools/gen_macro.py b/tools/gen_macro.py
+index 11682b3..05447d6 100644
+--- a/tools/gen_macro.py
++++ b/tools/gen_macro.py
+@@ -57,6 +57,21 @@ EURORACK_COMMIT = "08460a69a7e1f7a81c5a2abcc7189c9a6b7208d4"     # 16/08/2023
+ STMLIB_COMMIT = "e3bd7c9cc00e4364166f9905c0509b6ffd0535ec"       # 30/05/2023, son sous-module stmlib à ce commit
+ SOURCES = ("braids/macro_oscillator.cc", "braids/analog_oscillator.cc", "braids/digital_oscillator.cc",
+            "braids/resources.cc", "stmlib/utils/random.cc")
++# notes/75 : Peaks (4 batteries) et Sheep (3 banques) après les 47 modèles de Braids. Hors de portée des tweaks
++# existants : EXT reste False (leurs octets ne bougent pas) ; gen_macro_ext.py le met à True pour son tweak.
++EXT = False
++EXT_SOURCES = ("peaks/drums/bass_drum.cc", "peaks/drums/snare_drum.cc", "peaks/drums/high_hat.cc",
++               "peaks/drums/fm_drum.cc", "peaks/resources.cc", "tides/resources.cc")
++EXT_LOCAL = ("peaks_glue.cc", "sheep_glue.cc")
++EXT_DEFS = ("-DMC_EXT", "-DMC_SHEEP")
++# Sheep's wavetable (tides::wt_waves, 91 KB) does not fit in the window the code of MACRO has (pay .. pay + STUBS, 99 KB
++# of it used by Braids): it is linked on its own at pay + SHEEP_OFF, above ACID's variables (the payload's runtime
++# room is 1 MB with Model-TG, gen_macro_syntakt.TG_ROOM), and packed as one more part. compile_machine leaves it in
++# EXT_BLOB = (address, bytes) for the generator (gen_macro_ext.py).
++SHEEP_OFF = 0x7a000
++SHEEP_SECTION = ".rodata._ZN5tides8wt_wavesE"
++EXT_BLOB = None
++EXT_NAMES = ("PEAKS_BASS_DRUM", "PEAKS_SNARE_DRUM", "PEAKS_HI_HAT", "PEAKS_FM_DRUM", "SHEEP_A", "SHEEP_B", "SHEEP_C")
+ # -O2 : le coût mesuré d'une voix (notes/43 §8) ; pas d'exceptions ni de constructeurs globaux (rien ne les appelle)
+ CXXFLAGS = ["-mcpu=54418", "-O2", "-U_FORTIFY_SOURCE", "-fno-exceptions", "-fno-rtti", "-fno-threadsafe-statics",
+             "-fno-use-cxa-atexit", "-fno-pic", "-fno-common", "-ffunction-sections", "-fdata-sections",
+@@ -95,6 +110,8 @@ LINK = """SECTIONS
+   /DISCARD/ : {{ *(.comment) *(.note*) *(.eh_frame*) }}
+ }}
+ """
++# .sheep comes first: the linker gives an input section to the first rule that matches it, and .rodata then follows .text
++LINK_EXT = LINK.replace("  .text {code:#x}", "  .sheep {sheep:#x} : {{ *(" + SHEEP_SECTION + ") }}\n  .text {code:#x}")
+ TG_FIRST = gs.TG_FIRST
+ BRAIDS_RENDER = "_ZN6braids15MacroOscillator6RenderEPKhPsj"      # MacroOscillator::Render(sync, buffer, size)
+ 
+@@ -125,22 +142,25 @@ def license_text(repo):
+ 
+ 
+ def compile_machine(tmp, repo, pay, bss_at=None, code_end=None):
+-    """Braids + la passerelle, liés à pay (code, tables, données) et bss_at (variables ; pay + BSS_OFF par défaut).
++    """Braids (et, si EXT, Peaks et Sheep) + la passerelle, liés à pay (code, tables, données) et bss_at (variables ;
++    pay + BSS_OFF par défaut).
+     Le code et les données doivent finir avant code_end (gs.STUBS par défaut). Renvoie (octets de pay à la fin des
+     données, symboles, fin du BSS)."""
+     bss_at = pay + BSS_OFF if bss_at is None else bss_at
+     code_end = gs.STUBS if code_end is None else code_end
+     objs = []
+-    for s in SOURCES + (SRC / "macro.cc",):
++    extra = (*(repo / e for e in EXT_SOURCES), *(SRC / e for e in EXT_LOCAL)) if EXT else ()
++    for s in SOURCES + (SRC / "macro.cc",) + extra:
+         src = s if isinstance(s, pathlib.Path) else repo / s
+-        o = tmp / (src.stem + ".o")
+-        gx.run([gx.CROSS + "g++", *CXXFLAGS, f"-I{repo}", "-c", str(src), "-o", str(o)])
++        o = tmp / (src.parent.name + "_" + src.stem + ".o")        # braids/, peaks/ et tides/ ont chacun un resources.cc
++        gx.run([gx.CROSS + "g++", *CXXFLAGS, *(EXT_DEFS if EXT else ()), f"-I{repo}", *((f"-I{SRC}",) if EXT else ()),
++                "-c", str(src), "-o", str(o)])
+         objs.append(o)
+     o = tmp / "rt.o"
+     gx.run([gx.CROSS + "gcc", *CFLAGS_RT, "-c", str(SRC / "rt.c"), "-o", str(o)])
+     objs.append(o)
+     ld, elf, out = tmp / "link.ld", tmp / "macro.elf", tmp / "macro.bin"
+-    ld.write_text(LINK.format(code=pay, bss=bss_at))
++    ld.write_text(LINK_EXT.format(code=pay, bss=bss_at, sheep=pay + SHEEP_OFF) if EXT else LINK.format(code=pay, bss=bss_at))
+     gx.run([gx.CROSS + "ld", "-T", str(ld), "--gc-sections", "--no-warn-rwx-segments", "-e", "macro_update",
+             "-u", "macro_render", "-o", str(elf), *map(str, objs)])
+     secs = {}
+@@ -148,11 +168,18 @@ def compile_machine(tmp, repo, pay, bss_at=None, code_end=None):
+         f = line.split()
+         if len(f) > 4 and f[0].isdigit():
+             secs[f[1]] = (int(f[3], 16), int(f[2], 16))      # adresse, taille
+-    extra = set(secs) - {".text", ".rodata", ".data", ".bss"}
++    extra = set(secs) - {".text", ".rodata", ".data", ".bss"} - ({".sheep"} if EXT else set())
+     if extra:
+         raise SystemExit(f"!! sections inattendues (constructeurs globaux ?) : {sorted(extra)}")
+-    gx.run([gx.CROSS + "objcopy", "-O", "binary", "-R", ".bss", str(elf), str(out)])
++    global EXT_BLOB
++    gx.run([gx.CROSS + "objcopy", "-O", "binary", "-R", ".bss", *(("-R", ".sheep") if EXT else ()), str(elf), str(out)])
+     blob = out.read_bytes()
++    if EXT:
++        if ".sheep" not in secs or secs[".sheep"][1] < 90000:
++            raise SystemExit("!! Sheep's wavetable (tides::wt_waves) not found in the link: " + str(secs.get(".sheep")))
++        sheep = tmp / "sheep.bin"
++        gx.run([gx.CROSS + "objcopy", "-O", "binary", "-j", ".sheep", str(elf), str(sheep)])
++        EXT_BLOB = (pay + SHEEP_OFF, sheep.read_bytes())
+     syms = {}
+     for line in gx.run([gx.CROSS + "nm", str(elf)]).splitlines():
+         p_ = line.split()
+diff --git a/tools/gen_macro_ext.py b/tools/gen_macro_ext.py
+new file mode 100644
+index 0000000..9569808
+--- /dev/null
++++ b/tools/gen_macro_ext.py
+@@ -0,0 +1,97 @@
++#!/usr/bin/env python3
++"""Generate the tweak "macro-acid-ext-tg": Model-TG + MACRO + ACID without the five Syntakt engines, with MACRO's model
++list extended after Braids' 47 models by Peaks' four drums (47..50) and Sheep's three wavetable banks (51..53), notes/75.
++
++Same mechanics as tools/gen_acid_combos.py (build_macro_acid): MACRO linked at the start of the payload, ACID at
+++0x76000, and Sheep's 91 KB wavetable on its own at +0x7a000 (it does not fit in MACRO's code window). What changes: tools/gen_macro.py is switched to EXT (Peaks and Sheep sources, -DMC_EXT -DMC_SHEEP), and the
++machine's "Model" knob goes up to 53. The existing tweaks are not touched (EXT is False for them): this one is a new
++tweak, conflicting with every other MACRO combination.
++
++    git clone https://github.com/pichenettes/eurorack vendor/eurorack
++    git -C vendor/eurorack checkout 08460a69a7e1f7a81c5a2abcc7189c9a6b7208d4
++    git -C vendor/eurorack submodule update --init stmlib
++    python3 tools/gen_macro_ext.py --cycles firmware/model-cycles_OS1.13.syx --eurorack vendor/eurorack [--check]
++
++Needs the m68k toolchain of tools/gen_macro.py (Ubuntu 24.04: g++-m68k-linux-gnu, binutils-m68k-linux-gnu).
++Peaks and Tides: Emilie Gillet, MIT (same pinned commit as Braids).
++"""
++import argparse
++import json
++import pathlib
++import sys
++import tempfile
++
++HERE = pathlib.Path(__file__).resolve().parent
++sys.path.insert(0, str(HERE))
++sys.path.insert(0, str(HERE / "emu"))
++
++import gen_macro as gm             # noqa: E402
++import gen_acid_combos as gac      # noqa: E402
++import gen_sdvintage_exact as gx   # noqa: E402
++import gen_sdvintage_7th as g7     # noqa: E402
++import gen_syntakt_engines as gs   # noqa: E402
++import gen_macro_syntakt as gms    # noqa: E402
++
++TID = "macro-acid-ext"
++BASE_ID = "macro-acid-tg"          # the tweak this one replaces
++
++
++def build(img, repo):
++    """(tweak, info) : Model-TG + MACRO (Braids, Peaks, Sheep) + ACID."""
++    gm.EXT = True
++    n_models = len(gm.MODELS) + len(gm.EXT_NAMES)
++    gm.MACHINE = dict(gm.MACHINE, knobs=(("Timbre", "TIMB", 64), ("Model", "MODL", 0, 0, n_models - 1),
++                                         ("Color", "COLR", 64), ("Env Timbre", "ENVT", 0)))
++    tg = gs.tg_context(img)
++    real = gm.added_machine
++
++    def with_sheep(img_, tg_, machines, tmp, blobs, bss_end):
++        """Add Sheep's wavetable (linked at pay + SHEEP_OFF by gm.compile_machine) as one more part of the payload."""
++        at, data = gm.EXT_BLOB
++        end = (at + len(data) + 3) & ~3
++        if end > gs.PAY_TG + gms.TG_ROOM:
++            raise SystemExit(f"!! Sheep's wavetable up to {end:#x}: beyond the room Model-TG leaves")
++        return real(img_, tg_, machines, tmp, list(blobs) + [(at, data)], max(bss_end, end))
++
++    gm.added_machine = with_sheep
++    try:
++        out, info = gac.build_macro_acid(img, repo, tg)
++    finally:
++        gm.added_machine = real
++    out["id"] = TID + "-tg"
++    out["name"] = ("Model-TG + MACRO with Peaks drums and Sheep wavetables (47 Braids models, then " +
++                   ", ".join(gm.EXT_NAMES) + ") and ACID, without the Syntakt engines")
++    out["description"] = [
++        "EXPERIMENTAL (notes/75): not tested on a Model:Cycles. Model-TG + MACRO + ACID, the five Syntakt engines are left out.",
++        f"MACRO's Model knob goes to {n_models - 1}: 0..46 Braids (unchanged), 47..50 Peaks BASS DRUM, SNARE DRUM, HI-HAT, "
++        "FM DRUM, 51..53 SHEEP A, B, C (Sheep: the wavetable oscillator of the alternative Tides firmware).",
++        f"Peaks, Tides' wavetables and Braids compiled as is from {gm.EURORACK_REPO} {gm.EURORACK_COMMIT[:7]} "
++        "(Emilie Gillet, MIT: LICENSE-Braids); our glue: tools/machines/macro/ (voices.h, peaks_glue.cc, sheep_glue.cc, "
++        "sheep.h).",
++        "Models 47+ run at 48 kHz without RATE or BITS (FUNC + PITCH does nothing on them); the amp chain of the OS is kept.",
++    ] + [d for d in out["description"] if d.startswith("ACID")]
++    out["conflicts"] = sorted((set(out["conflicts"]) | {BASE_ID, "macro-acid", "macro-tg", "macro"}) - {out["id"]})
++    return out, info
++
++
++def main():
++    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
++    ap.add_argument("--cycles", required=True, help="official model-cycles_OS1.13.syx")
++    ap.add_argument("--eurorack", required=True, help=f"clone of {gm.EURORACK_REPO} at {gm.EURORACK_COMMIT[:7]}")
++    ap.add_argument("--check", action="store_true", help="check that the committed JSON matches")
++    args = ap.parse_args()
++    img = g7.cycles_main(args.cycles)
++    if len(img) != gx.IMAGE_LEN:
++        raise SystemExit("!! not the official MAIN OS 1.13")
++    repo = pathlib.Path(args.eurorack).resolve()
++    gm.check_sources(repo)
++    tweak, info = build(img, repo)
++    path = gm.DEV / f"{tweak['order']}-{tweak['id']}.json"
++    print(f"  {tweak['id']} : {len(tweak['writes'])} writes, payload {info['size']} B, packed {info['packed']} B, "
++          f"image up to {info['end']:#x} (limit {gs.END_LIMIT:#x}, {gs.END_LIMIT - info['end']} B free)")
++    if gm.emit(path, json.dumps(tweak, indent=1) + "\n", args.check):
++        raise SystemExit(1)
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/tools/machines/macro/macro.cc b/tools/machines/macro/macro.cc
+index 4bd9e19..c3c2db4 100644
+--- a/tools/machines/macro/macro.cc
++++ b/tools/machines/macro/macro.cc
+@@ -41,7 +41,9 @@
+ #include <new>
+ 
+ #include "braids/macro_oscillator.h"
++#ifdef MC_EXT
+ #include "voices.h"                               /* Peaks drums, Sheep (notes/75): models after the 47 of Braids */
++#endif
+ 
+ typedef signed char s8;
+ typedef short s16;
+@@ -62,7 +64,11 @@ typedef unsigned int u32;
+ #define P16(o)      (*(const s16 *)(p + (o)))
+ 
+ #define BRAIDS_MODELS 47                             /* CSAW .. DIGITAL_MODULATION (sans QUESTION_MARK) */
+-#define MODELS      (BRAIDS_MODELS + EXT_KINDS)      /* puis BASS DRUM, SNARE DRUM, HI-HAT, FM DRUM (Peaks), SHEEP A, B, C */
++#ifdef MC_EXT                                        /* notes/75 : puis BASS DRUM, SNARE DRUM, HI-HAT, FM DRUM (Peaks), SHEEP A, B, C */
++#define MODELS      (BRAIDS_MODELS + EXT_KINDS)
++#else
++#define MODELS      BRAIDS_MODELS
++#endif
+ #define HIST        22                               /* echantillons du bloc precedent pour le filtre */
+ #define IDLE_LEVEL  (1 << 14)                        /* enveloppe d'ampli sous -102 dB : voix muette */
+ #define ONE         (1 << 24)                        /* RATE : un echantillon (Q24) */
+@@ -85,9 +91,11 @@ struct Track {
+ 	u32 ph;                                          /* 48 kHz ou moins : phase du rendu (Q24) */
+ 	u32 hph;                                         /* echantillonneur-bloqueur : sa phase (Q24) */
+ 	s32 cur;                                         /* RATE : echantillon tenu */
++#ifdef MC_EXT
+ 	s32 ext;                                         /* modele hors Braids en cours (0..EXT_KINDS-1), -1 : un modele de Braids */
+ 	s32 strike;                                      /* modele hors Braids : un trig au prochain rendu */
+ 	alignas(4) unsigned char xs[EXT_BYTES];          /* son etat (voices.h) */
++#endif
+ };
+ 
+ /* pas de constructeurs globaux (rien ne les appellerait) : placement new a l'initialisation de la piste */
+@@ -152,8 +160,10 @@ extern "C" void macro_update(s32 pmod, char *v, const char *p)
+ 		tr->mode = -1;
+ 		tr->ph = tr->hph = ONE - 1;              /* le 1er echantillon sort tout de suite */
+ 		tr->cur = 0;
++#ifdef MC_EXT
+ 		tr->ext = -1;
+ 		tr->strike = 0;
++#endif
+ 		V32(MARK_OFF) = MARK;
+ 	}
+ 	/* chaine d'ampli d'origine, reglee comme TONE (0x400aa7b8) */
+@@ -177,6 +187,7 @@ extern "C" void macro_update(s32 pmod, char *v, const char *p)
+ 
+ 	shape = P16(0x18) >> 8;
+ 	shape = shape < 0 ? 0 : (shape >= MODELS ? MODELS - 1 : shape);
++#ifdef MC_EXT
+ 	if (shape >= BRAIDS_MODELS) {                    /* Peaks, Sheep (notes/75) : un rendu de 32 trames a 48 kHz, sans RATE ni BITS */
+ 		s32 kind = shape - BRAIDS_MODELS;
+ 		if (tr->ext != kind) {                   /* nouveau modele : etat remis a zero */
+@@ -197,6 +208,7 @@ extern "C" void macro_update(s32 pmod, char *v, const char *p)
+ 		return;
+ 	}
+ 	tr->ext = -1;
++#endif
+ 	tr->osc.set_shape(static_cast<braids::MacroOscillatorShape>(shape));
+ 
+ 	/* FINE (FUNC + PITCH) : RATE en dessous de 64, BITS au-dessus */
+@@ -254,6 +266,7 @@ extern "C" void macro_render(s32 *out, char *v)
+ 			out[i] = 0;
+ 		return;
+ 	}
++#ifdef MC_EXT
+ 	if (tr->ext >= 0) {                              /* Peaks, Sheep : 32 trames a 48 kHz (voices.h), pleine echelle -> 1/2 (Q31) */
+ 		s16 b[32];
+ 		ext_render(tr->xs, tr->ext, tr->strike, b, 32);
+@@ -266,6 +279,7 @@ extern "C" void macro_render(s32 *out, char *v)
+ 		PUNCH(out, v);
+ 		return;
+ 	}
++#endif
+ 	if (tr->want != tr->mode) {                      /* changement de rendu : on repart de zero */
+ 		for (i = 0; i < HIST; i++)
+ 			tr->x[i] = 0;
+diff --git a/tools/setup_ext_build.sh b/tools/setup_ext_build.sh
+new file mode 100755
+index 0000000..3d81307
+--- /dev/null
++++ b/tools/setup_ext_build.sh
+@@ -0,0 +1,46 @@
++#!/bin/sh
++# One command, in a fresh Ubuntu 24.04 shell (a GitHub Codespace works): installs the m68k toolchain, fetches the pinned
++# Mutable Instruments sources, proves Peaks and Sheep on the host, generates the tweak "macro-acid-ext-tg" and builds
++# the test firmware. Your official files go in firmware/ first (git-ignored, never commit them):
++#     firmware/model-cycles_OS1.13.syx   firmware/Syntakt_OS1.42.syx
++# Everything is logged in build/ext/. Nothing is flashed, committed or pushed.
++set -e
++cd "$(dirname "$0")/.."
++LOG=build/ext; mkdir -p "$LOG" build
++CY=firmware/model-cycles_OS1.13.syx; ST=firmware/Syntakt_OS1.42.syx
++[ -f "$CY" ] || { echo "!! $CY missing"; exit 1; }
++[ -f "$ST" ] || { echo "!! $ST missing"; exit 1; }
++echo "== 1/6 toolchain"
++if ! command -v m68k-linux-gnu-g++ >/dev/null; then
++  sudo apt-get update -qq && sudo apt-get install -y -qq g++-m68k-linux-gnu binutils-m68k-linux-gnu
++fi
++m68k-linux-gnu-g++ --version | head -1
++python3 -c "import unicorn, numpy" 2>/dev/null || python3 -m pip install --quiet --break-system-packages unicorn numpy 2>&1 | tail -1 || true
++echo "== 2/6 Mutable Instruments sources at the pinned commit"
++if [ ! -d vendor/eurorack/.git ]; then
++  mkdir -p vendor
++  git clone -q https://github.com/pichenettes/eurorack vendor/eurorack
++fi
++git -C vendor/eurorack checkout -q 08460a69a7e1f7a81c5a2abcc7189c9a6b7208d4
++git -C vendor/eurorack submodule update --init stmlib
++echo "== 3/6 host proofs against the original Peaks and Tides code"
++tools/check_peaks_host.sh vendor/eurorack 2>&1 | tail -1 | tee "$LOG/peaks_host.log"
++tools/check_sheep_host.sh vendor/eurorack 2>&1 | tail -1 | tee "$LOG/sheep_host.log"
++echo "== 4/6 baseline: the stock OS still builds with the same MAIN OS hash"
++python3 tools/build.py -i "$CY" --syntakt "$ST" --os -o build/baseline.syx 2>&1 | tee "$LOG/baseline.log" | grep "MAIN OS"
++echo "== 5/6 generate the tweak"
++python3 tools/gen_macro_ext.py --cycles "$CY" --eurorack vendor/eurorack 2>&1 | tee "$LOG/gen.log"
++echo "== 6/6 build the test firmware (the OS recipe, the five engines replaced by macro-acid-ext-tg)"
++LIST=$(python3 - <<'PY'
++import json
++o = json.load(open("os.json"))
++ids = [t["id"] if isinstance(t, dict) else t for t in o["tweaks"]]
++ids = [i for i in ids if not i.startswith("syntakt-tg-")] + ["macro-acid-ext-tg"]
++print(",".join(ids))
++PY
++)
++echo "tweaks: $LIST"
++python3 tools/build.py -i "$CY" --syntakt "$ST" -t "$LIST" -o build/Peaks-Sheep-Model-Cycles-Test.syx 2>&1 | tee "$LOG/build.log" | tail -8
++echo
++echo "Done. Test firmware: build/Peaks-Sheep-Model-Cycles-Test.syx (experimental: not tested on a Model:Cycles)."
++echo "Logs: $LOG/*.log  -- paste build/ext/gen.log and build/ext/build.log if anything failed."
+diff --git a/tweaks/model-cycles_OS1.13/PROVENANCE.md b/tweaks/model-cycles_OS1.13/PROVENANCE.md
+index 7a8450a..7175298 100644
+--- a/tweaks/model-cycles_OS1.13/PROVENANCE.md
++++ b/tweaks/model-cycles_OS1.13/PROVENANCE.md
+@@ -13,6 +13,7 @@
+ | `26-acid.json`, `35-acid-tg.json` | ce projet, d'après Open303 de Robin Schmidt | Machine ACID, une basse acide à la manière de la TB-303 : code en virgule fixe écrit par ce projet (`tools/machines/acid/` : `acid_dsp.h` le son, `acid.c` la passerelle, `acid_tables.h` généré par `tools/gen_acid.py`) d'après le modèle d'Open303 ([RobinSchmidt/Open303](https://github.com/RobinSchmidt/Open303), commit `313bf0d`) : structure de son filtre TB_303, de l'enveloppe du filtre et du slide, et ses constantes mesurées ; aucune ligne de son C++ n'est reprise telle quelle ; la saturation (DRIVE) est la nôtre. Licence MIT, texte dans [`LICENSE-Open303`](LICENSE-Open303) (recopié à côté du flasher). Compilé et rangé par `tools/gen_acid.py` avec la mécanique de machine ajoutée de `tools/gen_macro.py` (`added_machine`) ; `35-acid-tg.json` s'ajoute après `30-model-tg-st.json` ([note 54](../../notes/54-machine-acid.md), preuve `tools/emu/test_acid.py`). |
+ | `24-syntakt-<moteurs>-macro.json`, `31-syntakt-tg-<moteurs>-macro.json` | Émilie Gillet (Braids), passerelle de ce projet | Machine MACRO avec les moteurs du Syntakt, produits par `tools/gen_macro_syntakt.py` ([note 50](../../notes/50-macro-avec-moteurs-syntakt.md)) : la partie des moteurs est celle de `24-syntakt-<moteurs>.json` / `31-syntakt-tg-<moteurs>.json` (passerelle et régulateur repris octet pour octet ; code du Syntakt extrait **au build** de TON `Syntakt_OS1.42.syx`, aucun code Elektron dans le JSON ; il porte des octets `old` et des valeurs de relocalisation lus dans les OS d'Elektron, non couverts par la licence du projet ([`THIRD-PARTY-NOTICES.md`](../../THIRD-PARTY-NOTICES.md))), la partie MACRO est compilée comme `25-macro.json` (même code de Braids, sans modification, licence MIT, [`LICENSE-Braids`](LICENSE-Braids)) ; la charge utile est rangée compressée et décompressée au démarrage par le crochet (`tools/machines/syntakt_bridge/stub.S`, `APLIB`), dont le décompresseur 68000 est écrit d'après `depack` de `tools/mtlib/aplib.py` (drumkilla, MIT), lui-même d'après `aplib.c` d'elektron-firmware-tool (Marcel Bierling, MIT ; textes dans `tools/mtlib/`, servis avec le flasher). |
+ | `25-macro-acid.json`, `32-macro-acid-tg.json`, `24-syntakt-<moteurs>[-macro]-acid.json`, `31-syntakt-tg-<moteurs>[-macro]-acid.json` | ce projet, d'après Open303 de Robin Schmidt ; Émilie Gillet (Braids) | Machine ACID avec MACRO et/ou les moteurs du Syntakt, produits par `tools/gen_acid_combos.py` ([note 54 §11](../../notes/54-machine-acid.md)) : ACID est le code de `26-acid.json` (`tools/machines/acid/`, d'après Open303, licence MIT, [`LICENSE-Open303`](LICENSE-Open303)), compilé avec `GOV_SKIP` et lié à `+0x76000` ; MACRO est compilé comme `25-macro.json` (Braids sans modification, licence MIT, [`LICENSE-Braids`](LICENSE-Braids)) ; avec les moteurs, la partie des moteurs et le crochet sont ceux de la ligne précédente (`tools/gen_macro_syntakt.py` : code du Syntakt extrait **au build** de TON `Syntakt_OS1.42.syx`, octets `old` et valeurs de relocalisation lus dans les OS d'Elektron, non couverts par la licence du projet, décompresseur d'après `tools/mtlib/aplib.py`, MIT). |
++| `32-macro-acid-ext-tg.json` | Émilie Gillet (Braids, Peaks, Tides), passerelle de ce projet | **Expérimental, non testé** ([note 75](../../notes/75-peaks-et-sheep-dans-macro.md)) : Model-TG + MACRO + ACID sans les moteurs du Syntakt, avec, après les 47 modèles de Braids, les quatre batteries de Peaks et les trois banques de Sheep. Code de Peaks (`peaks/drums/*`, `peaks/resources`) et tables de Tides (`tides/resources` : ondes, repli, filtre, incréments), même dépôt et mêmes commits que Braids (`08460a6`, stmlib `e3bd7c9`), compilés **sans modification** ; passerelles et voix de Sheep de ce projet (`tools/machines/macro/` : `voices.h`, `peaks_glue.cc`, `sheep_glue.cc`, `sheep.h`, ce dernier reprenant l'arithmétique de `Generator::ProcessWavetable` de Tides, prouvée à l'échantillon près par `tools/check_sheep_host.sh`). Licence MIT (Émilie Gillet), texte dans [`LICENSE-Braids`](LICENSE-Braids). Produit par `tools/gen_macro_ext.py`. |
+ | `33-sample-preview.json`, `33-sample-preview-st.json` | ce projet | Écoute des samples dans le navigateur avec le Sampler de Model-TG : assemblée depuis `tools/machines/sample_preview/` (`sample_preview.S`, `sample_preview.ld`) par `tools/gen_sample_preview.py`, dans quatre masques de sprites 47×47 libérés (`0x40183118`, `0x40185018`, `0x40185968`, `0x40185c58`, `tools/sprites.py`, partagés avec Chord Keys qui exclut Model-TG) ; deux fichiers aux écritures identiques, l'un sur `model-tg`, l'autre sur `model-tg-st` ([note 46](../../notes/46-ecoute-des-samples.md), preuve `tools/emu/test_sample_preview.py`). S'appuie sur Model-TG de TinyGregAudio (MIT) : appelle ses fonctions aux adresses de ses symboles (exportés par `tools/gen_model_tg.py` dans les `symbols` de `30-model-tg*.json`) ; seules la copie du son de la piste et l'écriture du nom « SMP » + 8 chiffres hexadécimaux dans `pv_parse` reprennent, instruction pour instruction, celles de son `pool_store_hook` (une vingtaine d'instructions, licence MIT, texte dans [`LICENSE-Model-TG`](LICENSE-Model-TG), lien sur la carte du flasher) ; son accroche vide en `0x4008171e` (`pad_load_hook`) est remplacée par la nôtre, qui rejoue les deux instructions qu'elle déplaçait. |
+ | `40-arp.json` | ce projet | Arpégiateur à la place du retrig : compilé depuis `tools/machines/arp/` (`arp.c`, `arp_hooks.S`, `arp.ld`) par `tools/gen_arp.py`, dans quatre masques de sprites libérés (`0x4018a788`, `0x4016cba8`, et les masques 47×47 `0x40189930`, `0x4018a220`, `tools/sprites.py`). Réglages dans l'octet +512 de la piste du pattern, inutilisé par l'OS ([note 32](../../notes/32-arpegiateur.md)). |
+ | `41-trig-hold.json` | ce projet | Plus de temps pour effacer un trig (défaut de l'OS d'origine) : assemblé depuis `tools/machines/trig_hold/` (`trig_hold.S`, `trig_hold.ld`) par `tools/gen_trig_hold.py`, au début du masque de sprite libéré `0x4015c044` (`tools/sprites.py`), devant les stubs de `6ch-usbup` ([note 33](../../notes/33-effacer-un-trig.md)). |
+-- 
+2.43.0
+
