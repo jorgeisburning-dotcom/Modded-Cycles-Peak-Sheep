@@ -6,7 +6,7 @@
  *
  * State (8 bytes per machine): +0 long = the 32-bit shift register, +4 long = the clock counter for DIV.
  *
- * tm_chance : d0 = PROB knob 0..127  ->  d0 = flip chance in 1/256 (0..256). Clobbers nothing else.
+ * tm_chance : d0 = PROB knob 0..127  ->  d0 = flip chance in 1/256 (0..256). Clobbers d1.
  * tm_clock  : a0 = state, d1 = LENGTH 1..32, d2 = flip chance (from tm_chance), d3 = DIV 1..8,
  *             d4 = random byte 0..255 (upper bits clear)  ->  d0 = 1 if the register moved, else 0.
  *             Clobbers d5, d6, d7.
@@ -27,11 +27,16 @@ tm_chance:
 2:	cmpi.l	#95, %d0
 	bgt.s	3f
 	lsl.l	#5, %d0				/* 1..95: knob * 32 / 95 */
-	divu.l	#95, %d0
+	move.l	#95, %d1			/* (ColdFire divides by a register, not by an immediate) */
+	divu.l	%d1, %d0
 	rts
 3:	subi.l	#95, %d0			/* 96..126: 32 + (knob - 95) * 96 / 31 */
-	mulu.l	#96, %d0
-	divu.l	#31, %d0
+	move.l	%d0, %d1			/* x * 96 = x * 64 + x * 32 */
+	lsl.l	#6, %d0
+	lsl.l	#5, %d1
+	add.l	%d1, %d0
+	move.l	#31, %d1
+	divu.l	%d1, %d0
 	addi.l	#32, %d0
 	rts
 
