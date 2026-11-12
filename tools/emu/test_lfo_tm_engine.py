@@ -59,7 +59,12 @@ class Rig:
         uc.reg_write(mk.UC_M68K_REG_A7, sp)
         for r, v in regs.items():
             uc.reg_write(getattr(mk, "UC_M68K_REG_" + r.upper()), v)
-        uc.emu_start(self.syms[name], STOP, count=1000)
+        try:
+            uc.emu_start(self.syms[name], STOP, count=1000)
+        except Exception:
+            pc = uc.reg_read(mk.UC_M68K_REG_PC)
+            print(f"!! CPU exception in {name} at pc={pc:#x} (offset {pc - self.syms[name]:#x} into it), regs {regs}")
+            raise
         return uc.reg_read(mk.UC_M68K_REG_D0) & 0xFFFFFFFF
 
 
