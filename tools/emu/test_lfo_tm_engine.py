@@ -32,7 +32,7 @@ def assemble():
         o, e, b = d / "t.o", d / "t.elf", d / "t.bin"
         subprocess.run([CROSS + "gcc", "-mcpu=54418", "-c", str(SRC), "-o", str(o)], check=True)
         subprocess.run([CROSS + "ld", "-Ttext", f"{CODE:#x}", "-o", str(e), str(o)], check=True)
-        subprocess.run([CROSS + "objcopy", "-O", "binary", "-j", ".text.tm", str(e), str(b)], check=True)
+        subprocess.run([CROSS + "objcopy", "-O", "binary", "-j", ".text", str(e), str(b)], check=True)
         syms = {}
         for l in subprocess.run([CROSS + "nm", str(e)], capture_output=True, text=True, check=True).stdout.splitlines():
             p = l.split()
